@@ -1,0 +1,85 @@
+---
+title: Welcome to Minichain
+description: Learn to build a blockchain from scratch using Rust
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+# Building a Blockchain from Scratch
+
+Welcome to **Minichain** — a hands-on guide to building a minimal but complete blockchain implementation in Rust.
+
+## What You'll Build
+
+By the end of this book, you'll have built:
+
+<CardGrid>
+  <a href="/part1/chapter1-core" class="card-link">
+    <Card title="Core Primitives" icon="puzzle">
+      Cryptographic hashing, digital signatures, addresses, transactions, and blocks
+    </Card>
+  </a>
+  <a href="/part2/chapter2-storage" class="card-link">
+    <Card title="Storage Layer" icon="document">
+      Persistent storage for accounts, blocks, and contract state using sled
+    </Card>
+  </a>
+  <a href="/part3/chapter3-vm" class="card-link">
+    <Card title="Virtual Machine" icon="laptop">
+      A register-based VM with 16 registers, gas metering, and execution tracing
+    </Card>
+  </a>
+  <a href="/part4/chapter4-assembler" class="card-link">
+    <Card title="Assembler" icon="setting">
+      A custom assembly language that compiles to VM bytecode
+    </Card>
+  </a>
+  <a href="/part5/chapter5-chain" class="card-link">
+    <Card title="Consensus" icon="approve-check">
+      Proof of Authority (PoA) consensus for block validation
+    </Card>
+  </a>
+  <a href="/part6/chapter6-cli" class="card-link">
+    <Card title="CLI" icon="rocket">
+      A complete command-line interface to interact with your blockchain
+    </Card>
+  </a>
+</CardGrid>
+
+## Why Build a Blockchain?
+
+Building a blockchain from scratch teaches you:
+
+- **Cryptographic fundamentals** — hashing, signing, verification
+- **Data structures** — merkle trees, state tries
+- **Virtual machine design** — opcodes, gas, execution
+- **Systems programming** — persistence, serialization, performance
+- **Distributed systems concepts** — consensus, state machines
+
+## Prerequisites
+
+This book assumes familiarity with:
+
+- Rust programming (ownership, traits, error handling)
+- Basic command-line usage
+- Git version control
+
+## Project Structure
+
+```
+minichain/
+├── crates/
+│   ├── core/        # Blockchain primitives
+│   ├── vm/          # Virtual machine
+│   ├── storage/     # Persistent state
+│   ├── consensus/   # PoA logic
+│   ├── chain/       # Blockchain orchestration
+│   ├── assembler/   # Assembly compiler
+│   └── cli/         # Command-line interface
+├── contracts/       # Example contracts
+└── tests/           # Integration tests
+```
+
+## Let's Begin!
+
+Ready to dive in? Start with the [Project Overview](/intro/overview) to understand the architecture, then jump into [Chapter 1: Core Primitives](/part1/chapter1-core).

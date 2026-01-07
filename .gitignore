@@ -1,0 +1,34 @@
+# Rust build artifacts
+/target/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Claude Code
+.claude/
+
+# Debug / Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Docs - build output
+docs/dist/
+docs/.astro/
+
+# Docs - dependencies
+docs/node_modules/

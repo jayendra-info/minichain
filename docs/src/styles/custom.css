@@ -1,0 +1,43 @@
+/* Custom styles for the minichain book */
+
+/* Light mode accent colors */
+:root[data-theme='light'] {
+	--sl-color-accent-low: #fff0f3;
+	--sl-color-accent: #c41e3a;
+	--sl-color-accent-high: #8b0000;
+}
+
+/* Dark mode accent colors */
+:root[data-theme='dark'] {
+	--sl-color-accent-low: #1a1a2e;
+	--sl-color-accent: #e94560;
+	--sl-color-accent-high: #ff6b6b;
+}
+
+/* Code block styling */
+.expressive-code {
+	margin: 1.5rem 0;
+}
+
+/* Rust code highlighting enhancement */
+code {
+	font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Clickable card links */
+.card-link {
+	text-decoration: none;
+	color: inherit;
+	display: block;
+	border-radius: 0.5rem;
+	transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-link:hover {
+	transform: translateY(-2px);
+	text-decoration: none;
+}
+
+.card-link:hover .card {
+	border-color: var(--sl-color-accent);
+}

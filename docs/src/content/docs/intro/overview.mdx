@@ -1,0 +1,91 @@
+---
+title: Project Overview
+description: Architecture and design decisions for Minichain
+---
+
+# Project Overview
+
+Minichain is a **single-node, account-based blockchain** with a register-based virtual machine, Proof of Authority consensus, and persistent storage.
+
+## Design Philosophy
+
+We prioritize **learning over production-readiness**. Every component is designed to be:
+
+- **Understandable** — Clear, well-documented code
+- **Minimal** — No unnecessary features
+- **Complete** — A working end-to-end system
+
+## Architecture
+
+```
+┌─────────────┐
+│     CLI     │ ← User interface
+└──────┬──────┘
+       │
+┌──────┴──────┐
+│    Chain    │ ← Orchestration
+└──────┬──────┘
+       │
+┌──────┴──────┬───────────┬───────────┐
+│     VM      │ Consensus │  Storage  │
+└──────┬──────┴─────┬─────┴─────┬─────┘
+       │            │           │
+       └────────────┴───────────┘
+                    │
+              ┌─────┴─────┐
+              │   Core    │ ← Primitives
+              └───────────┘
+```
+
+## Crate Dependencies
+
+| Crate | Depends On | Purpose |
+|-------|------------|---------|
+| `core` | — | Primitives: hashing, crypto, blocks, transactions |
+| `vm` | core | Virtual machine execution |
+| `storage` | core | Persistent state with sled |
+| `consensus` | core | PoA validation |
+| `chain` | core, vm, storage, consensus | Blockchain logic |
+| `assembler` | core | Assembly → bytecode |
+| `cli` | all | User interface |
+
+## Key Technologies
+
+| Component | Technology | Why |
+|-----------|------------|-----|
+| Hashing | Blake3 | Fast, secure, modern |
+| Signing | Ed25519 | Fast, compact signatures |
+| Storage | sled | Embedded, transactional |
+| Serialization | bincode | Compact binary format |
+| CLI | clap | Rust standard for CLIs |
+
+## Account Model
+
+We use an **account-based model** (like Ethereum) rather than UTXO (like Bitcoin):
+
+```rust
+pub struct Account {
+    pub nonce: u64,           // Transaction count
+    pub balance: u64,         // Native token balance
+    pub code_hash: Option<Hash>,  // Contract bytecode hash
+    pub storage_root: Hash,   // Storage trie root
+}
+```
+
+**Why account-based?**
+- Simpler mental model
+- Easier smart contract state
+- Natural fit for our VM
+
+## Consensus: Proof of Authority
+
+For simplicity, we use **Proof of Authority (PoA)**:
+
+- Single trusted authority signs blocks
+- No mining or staking complexity
+- Instant finality
+- Perfect for learning and private chains
+
+## What's Next?
+
+Let's start building! Head to [Chapter 1: Core Primitives](/part1/chapter1-core) to implement the foundation.

@@ -1,0 +1,24 @@
+[package]
+name = "minichain-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Command-line interface for minichain"
+
+[[bin]]
+name = "minichain"
+path = "src/main.rs"
+
+[dependencies]
+minichain-core.workspace = true
+minichain-vm.workspace = true
+minichain-storage.workspace = true
+minichain-consensus.workspace = true
+minichain-chain.workspace = true
+minichain-assembler.workspace = true
+clap.workspace = true
+colored.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "minichain-chain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Blockchain orchestration for minichain"
+
+[dependencies]
+minichain-core.workspace = true
+minichain-vm.workspace = true
+minichain-storage.workspace = true
+minichain-consensus.workspace = true
+thiserror.workspace = true

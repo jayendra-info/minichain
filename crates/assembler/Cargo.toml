@@ -1,0 +1,12 @@
+[package]
+name = "minichain-assembler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Assembly to bytecode compiler for minichain"
+
+[dependencies]
+minichain-core.workspace = true
+logos.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "minichain-consensus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Proof of Authority consensus for minichain"
+
+[dependencies]
+minichain-core.workspace = true
+thiserror.workspace = true

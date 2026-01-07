@@ -1,0 +1,54 @@
+---
+title: Building a Blockchain from Scratch
+description: A hands-on guide to building a minimal blockchain with Rust
+template: splash
+hero:
+  tagline: Learn blockchain internals by building one from scratch in Rust
+  image:
+    file: ../../assets/houston.webp
+  actions:
+    - text: Start Reading
+      link: /intro/welcome
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/example/minichain
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What You'll Learn
+
+<CardGrid stagger>
+  <a href="/part1/chapter1-core" class="card-link">
+    <Card title="Cryptographic Primitives" icon="seti:lock">
+      Blake3 hashing, Ed25519 signatures, and merkle trees
+    </Card>
+  </a>
+  <a href="/part3/chapter3-vm" class="card-link">
+    <Card title="Virtual Machine Design" icon="seti:cpu">
+      Build a register-based VM with gas metering
+    </Card>
+  </a>
+  <a href="/part2/chapter2-storage" class="card-link">
+    <Card title="State Management" icon="seti:db">
+      Persistent storage with accounts and contract state
+    </Card>
+  </a>
+  <a href="/part4/chapter4-assembler" class="card-link">
+    <Card title="Smart Contracts" icon="seti:todo">
+      Deploy and execute bytecode on your blockchain
+    </Card>
+  </a>
+</CardGrid>
+
+## Project: Minichain
+
+A minimal but complete blockchain featuring:
+
+- **Account-based model** (like Ethereum)
+- **Register-based VM** with 16 registers
+- **Proof of Authority** consensus
+- **Custom assembly language**
+- **Full CLI** for interaction

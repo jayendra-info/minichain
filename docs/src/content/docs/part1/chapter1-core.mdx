@@ -1,0 +1,516 @@
+---
+title: "Chapter 1: Core Primitives"
+description: Building the cryptographic foundation of our blockchain
+---
+
+import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+# Chapter 1: Core Primitives
+
+Every blockchain rests on a foundation of cryptographic primitives. In this chapter, we'll build the `core` crate — the bedrock upon which everything else depends.
+
+## What We're Building
+
+By the end of this chapter, you'll have implemented:
+
+| Module | Purpose |
+|--------|---------|
+| `hash.rs` | Blake3 hashing utilities |
+| `crypto.rs` | Ed25519 signatures and addresses |
+| `account.rs` | Account state representation |
+| `transaction.rs` | Transaction types and signing |
+| `block.rs` | Block and header structures |
+| `merkle.rs` | Merkle tree for transaction proofs |
+
+---
+
+## 1.1 Hashing with Blake3
+
+Hashing is the heartbeat of a blockchain. We use it for:
+- Block identification
+- Transaction fingerprinting
+- Merkle tree construction
+- Address derivation
+
+### Why Blake3?
+
+https://github.com/BLAKE3-team/BLAKE3/
+
+| Algorithm | Speed | Security | Output |
+|-----------|-------|----------|--------|
+| SHA-256 | Moderate | Proven | 32 bytes |
+| Keccak-256 | Moderate | Proven | 32 bytes |
+| **Blake3** | **Very Fast** | Modern | 32 bytes |
+
+Blake3 is extremely fast (especially on modern CPUs with SIMD) while maintaining strong security properties. It's based on the BLAKE2 design but optimized for parallelism and performance.
+
+<Aside type="note" title="Learn More About Blake3">
+- [BLAKE3 Paper (PDF)](https://cgi.cse.unsw.edu.au/~cs4601/refs/papers/blake3.pdf) — The original cryptographic specification
+- [BLAKE Hash Function (Wikipedia)](https://en.wikipedia.org/wiki/BLAKE_(hash_function)) — History and context
+- [BLAKE3 Deep Dive (Video)](https://www.youtube.com/watch?v=nk4nefmguZk) — Excellent technical explanation
+- [BLAKE3 CryptAnalysis](https://eprint.iacr.org/2019/1492.pdf) — Cryptanalysis of various cryptographic Algorithms
+</Aside>
+
+### The Hash Type
+
+We wrap the raw 32-byte array in a newtype for better ergonomics:
+
+```rust
+/// A 256-bit hash value.
+pub type H256 = [u8; 32];
+
+/// A wrapper type for H256 with Display and Debug formatting.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct Hash(pub H256);
+
+impl Hash {
+    /// The zero hash (all zeros).
+    pub const ZERO: Self = Self([0u8; 32]);
+
+    /// Convert to a hex string.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.0)
+    }
+
+    /// Parse from a hex string.
+    pub fn from_hex(s: &str) -> Result<Self, hex::FromHexError> {
+        let bytes = hex::decode(s)?;
+        if bytes.len() != 32 {
+            return Err(hex::FromHexError::InvalidStringLength);
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        Ok(Self(arr))
+    }
+}
+```
+
+<Aside type="tip">
+The `Hash::ZERO` constant is useful for genesis blocks and empty merkle roots.
+</Aside>
+
+### Hashing Functions
+
+```rust
+/// Hash arbitrary data using Blake3.
+pub fn hash(data: &[u8]) -> Hash {
+    Hash(blake3::hash(data).into())
+}
+
+/// Hash multiple pieces of data by concatenating them.
+pub fn hash_concat(parts: &[&[u8]]) -> Hash {
+    let mut hasher = blake3::Hasher::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    Hash(hasher.finalize().into())
+}
+```
+
+<Aside type="tip">
+`hash_concat` doesn't allocate a concatenated buffer — it streams data into the hasher incrementally using `update()`. This is memory-efficient for merkle trees where we hash pairs of 32-byte nodes repeatedly.
+</Aside>
+
+---
+
+## 1.2 Cryptographic Identities
+
+Digital signatures let us prove ownership without revealing secrets. We use **Ed25519** for its speed and compact 64-byte signatures.
+
+### Address Derivation
+
+An address is derived from a public key:
+
+```
+Public Key (32 bytes)
+        ↓
+   Blake3 Hash
+        ↓
+ First 20 bytes = Address
+```
+
+```rust
+pub type AddressBytes = [u8; 20];
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct Address(pub AddressBytes);
+
+impl Address {
+    pub const ZERO: Self = Self([0u8; 20]);
+
+    pub fn to_hex(&self) -> String {
+        format!("0x{}", hex::encode(self.0))
+    }
+
+    pub fn from_hex(s: &str) -> Result<Self, CryptoError> {
+        let s = s.strip_prefix("0x").unwrap_or(s);
+        let bytes = hex::decode(s).map_err(|_| CryptoError::InvalidAddress)?;
+        // ... validation
+    }
+}
+```
+
+<Aside>
+We use 20 bytes (160 bits) for addresses, matching Ethereum's format. This provides a good balance between collision resistance and space efficiency.
+</Aside>
+
+### The Keypair
+
+A `Keypair` bundles signing and verification capabilities:
+
+```rust
+pub struct Keypair {
+    signing_key: SigningKey,
+    pub public_key: PublicKey,
+}
+
+impl Keypair {
+    /// Generate a new random keypair.
+    pub fn generate() -> Self {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+        Self {
+            signing_key,
+            public_key: PublicKey(verifying_key),
+        }
+    }
+
+    /// Get the address derived from the public key.
+    pub fn address(&self) -> Address {
+        self.public_key.to_address()
+    }
+
+    /// Sign a message.
+    pub fn sign(&self, message: &[u8]) -> Signature {
+        let sig = self.signing_key.sign(message);
+        Signature(sig.to_bytes())
+    }
+}
+```
+
+### Usage Example
+
+```rust
+// Generate a new identity
+let keypair = Keypair::generate();
+println!("Address: {}", keypair.address());
+
+// Sign a message
+let message = b"hello blockchain";
+let signature = keypair.sign(message);
+
+// Verify the signature
+assert!(keypair.public_key.verify(message, &signature).is_ok());
+```
+
+---
+
+## 1.3 Account State
+
+An account represents an entity on the blockchain — either a user or a smart contract.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Account {
+    /// Transaction count / sequence number.
+    pub nonce: u64,
+    /// Account balance in the native token.
+    pub balance: u64,
+    /// Hash of the contract bytecode (None for EOAs).
+    pub code_hash: Option<Hash>,
+    /// Root hash of the account's storage trie.
+    pub storage_root: Hash,
+}
+```
+
+### Two Types of Accounts
+
+<Tabs>
+  <TabItem label="User Account (EOA)">
+```rust
+// Externally Owned Account - controlled by a private key
+let user = Account::new_user(1000);
+assert!(user.is_eoa());
+assert_eq!(user.code_hash, None);
+```
+  </TabItem>
+  <TabItem label="Contract Account">
+```rust
+// Contract account - has associated bytecode
+let code_hash = hash(b"contract bytecode");
+let contract = Account::new_contract(code_hash);
+assert!(contract.is_contract());
+assert_eq!(contract.code_hash, Some(code_hash));
+```
+  </TabItem>
+</Tabs>
+
+### Nonce: Preventing Replay Attacks
+
+The `nonce` field is critical for security:
+
+```rust
+impl Account {
+    pub fn increment_nonce(&mut self) {
+        self.nonce = self.nonce.saturating_add(1);
+    }
+}
+```
+
+Every transaction must include the sender's current nonce. This prevents:
+- **Replay attacks** — can't resubmit the same transaction
+- **Transaction ordering** — nonces must be sequential
+
+---
+
+## 1.4 Transactions
+
+A transaction is a signed request to change blockchain state.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transaction {
+    pub nonce: u64,              // Sender's nonce
+    pub from: Address,           // Sender
+    pub to: Option<Address>,     // Recipient (None = deploy)
+    pub value: u64,              // Amount to transfer
+    pub data: Vec<u8>,           // Calldata or bytecode
+    pub gas_limit: u64,          // Max gas
+    pub gas_price: u64,          // Price per gas unit
+    pub signature: Signature,    // Ed25519 signature
+}
+```
+
+### Transaction Types
+
+```rust
+// 1. Value Transfer
+let transfer = Transaction::transfer(from, to, 1000, nonce, gas_price);
+
+// 2. Contract Deployment (to = None)
+let deploy = Transaction::deploy(from, bytecode, nonce, gas_limit, gas_price);
+
+// 3. Contract Call
+let call = Transaction::call(from, contract, calldata, value, nonce, gas_limit, gas_price);
+```
+
+### Signing Transactions
+
+We sign the hash of the transaction data (excluding the signature itself):
+
+```rust
+impl Transaction {
+    pub fn signing_hash(&self) -> Hash {
+        // Serialize everything except signature
+        let unsigned = UnsignedTransaction { /* ... */ };
+        let encoded = bincode::serialize(&unsigned).unwrap();
+        hash(&encoded)
+    }
+
+    pub fn sign(&mut self, keypair: &Keypair) {
+        let hash = self.signing_hash();
+        self.signature = keypair.sign_hash(&hash);
+    }
+}
+```
+
+### Contract Address Derivation
+
+When deploying a contract, the address is deterministic:
+
+```rust
+pub fn contract_address(&self) -> Option<Address> {
+    if !self.is_deploy() {
+        return None;
+    }
+    // Address = hash(sender || nonce)[0..20]
+    let mut data = Vec::new();
+    data.extend_from_slice(&self.from.0);
+    data.extend_from_slice(&self.nonce.to_le_bytes());
+    let h = hash(&data);
+    // First 20 bytes
+    Some(Address(h.0[..20].try_into().unwrap()))
+}
+```
+
+<Aside type="caution">
+This means you can predict contract addresses before deployment! This enables patterns like counterfactual instantiation.
+</Aside>
+
+---
+
+## 1.5 Blocks
+
+A block packages transactions into an ordered, tamper-evident unit.
+
+### Block Header
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockHeader {
+    pub height: u64,           // Block number
+    pub timestamp: u64,        // Unix timestamp
+    pub prev_hash: Hash,       // Link to parent
+    pub merkle_root: Hash,     // Transaction summary
+    pub state_root: Hash,      // World state after block
+    pub author: Address,       // Block producer
+    pub difficulty: u64,       // Always 1 for PoA
+    pub nonce: u64,            // Unused in PoA
+}
+```
+
+### The Chain of Blocks
+
+Each block references its parent via `prev_hash`:
+
+```
+┌─────────┐    ┌─────────┐    ┌─────────┐
+│ Block 0 │◄───│ Block 1 │◄───│ Block 2 │
+│ Genesis │    │         │    │         │
+└─────────┘    └─────────┘    └─────────┘
+prev_hash=0    prev_hash=     prev_hash=
+               hash(Block0)   hash(Block1)
+```
+
+### Genesis Block
+
+The genesis block is special — it has no parent:
+
+```rust
+impl Block {
+    pub fn genesis(authority: Address) -> Self {
+        Self {
+            header: BlockHeader {
+                height: 0,
+                timestamp: BlockHeader::current_timestamp(),
+                prev_hash: Hash::ZERO,  // No parent!
+                merkle_root: Hash::ZERO,
+                state_root: Hash::ZERO,
+                author: authority,
+                difficulty: 1,
+                nonce: 0,
+            },
+            transactions: Vec::new(),
+            signature: Signature::default(),
+        }
+    }
+}
+```
+
+### Block Signing (PoA)
+
+In Proof of Authority, the designated authority signs each block:
+
+```rust
+impl Block {
+    pub fn sign(&mut self, keypair: &Keypair) {
+        let hash = self.header.hash();
+        self.signature = keypair.sign_hash(&hash);
+    }
+
+    pub fn verify_signature(&self, public_key: &PublicKey) -> bool {
+        let hash = self.header.hash();
+        public_key.verify(hash.as_bytes(), &self.signature).is_ok()
+    }
+}
+```
+
+---
+
+## 1.6 Merkle Trees
+
+A merkle tree lets us summarize many items into a single hash, with efficient proofs.
+
+### Structure
+
+```
+        Root
+       /    \
+      H01    H23
+     /  \   /  \
+    H0  H1 H2  H3   ← Transaction hashes
+```
+
+### Computing the Root
+
+```rust
+pub fn merkle_root(hashes: &[Hash]) -> Hash {
+    if hashes.is_empty() {
+        return Hash::ZERO;
+    }
+    if hashes.len() == 1 {
+        return hashes[0];
+    }
+
+    let mut current_level: Vec<Hash> = hashes.to_vec();
+
+    while current_level.len() > 1 {
+        let mut next_level = Vec::new();
+        for chunk in current_level.chunks(2) {
+            let combined = if chunk.len() == 2 {
+                hash_concat(&[chunk[0].as_ref(), chunk[1].as_ref()])
+            } else {
+                // Odd number: hash with itself
+                hash_concat(&[chunk[0].as_ref(), chunk[0].as_ref()])
+            };
+            next_level.push(combined);
+        }
+        current_level = next_level;
+    }
+
+    current_level[0]
+}
+```
+
+### Why Merkle Trees?
+
+1. **Integrity** — Any change to any transaction changes the root
+2. **Efficiency** — Prove inclusion in O(log n) space
+3. **Light clients** — Verify transactions without full block data
+
+### Merkle Proofs
+
+```rust
+pub struct MerkleProof {
+    pub leaf: Hash,           // The item being proven
+    pub siblings: Vec<Hash>,  // Sibling hashes on path to root
+    pub directions: Vec<bool>, // Left or right at each level
+}
+```
+
+To verify: reconstruct the path from leaf to root using siblings.
+
+---
+
+## Summary
+
+We've built the cryptographic foundation:
+
+| Component | What It Does |
+|-----------|--------------|
+| `Hash` | 256-bit Blake3 digest |
+| `Address` | 160-bit identity derived from public key |
+| `Keypair` | Ed25519 key pair for signing |
+| `Account` | User or contract state |
+| `Transaction` | Signed state change request |
+| `Block` | Ordered batch of transactions |
+| `MerkleTree` | Efficient transaction commitment |
+
+### Tests Passing
+
+```bash
+$ cargo test -p minichain-core
+
+running 47 tests
+test account::tests::test_new_user_account ... ok
+test crypto::tests::test_sign_and_verify ... ok
+test block::tests::test_genesis_block ... ok
+test merkle::tests::test_merkle_proof_valid ... ok
+# ... all 47 tests pass
+```
+
+---
+
+## What's Next?
+
+With our primitives in place, we're ready to build the **storage layer** in [Chapter 2](/part2/chapter2-storage), where we'll persist accounts, blocks, and contract state using sled.
