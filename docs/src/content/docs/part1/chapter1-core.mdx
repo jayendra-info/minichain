@@ -117,6 +117,20 @@ pub fn hash_concat(parts: &[&[u8]]) -> Hash {
 
 Digital signatures let us prove ownership without revealing secrets. We use **Ed25519** for its speed and compact 64-byte signatures.
 
+<Aside type="tip" title="Bank Analogy">
+Think of blockchain cryptography like a bank account:
+
+| Blockchain | Bank Equivalent |
+|------------|-----------------|
+| **Private Key** | Your signature + PIN (secret, never share!) |
+| **Public Key** | Your ID card (proves who you are) |
+| **Address** | Your account number (share to receive funds) |
+| **Signing a Transaction** | Signing a check to authorize payment |
+| **Account** | Your bank account (balance + transaction history) |
+
+The key difference: in a bank, the bank verifies your signature. On a blockchain, **anyone** can verify it using math — no trusted third party needed.
+</Aside>
+
 ### Address Derivation
 
 An address is derived from a public key:
@@ -245,9 +259,83 @@ assert_eq!(contract.code_hash, Some(code_hash));
   </TabItem>
 </Tabs>
 
+### Why Two Types of Accounts?
+
+> **Core analogy (one you can say in one breath):**
+> An EOA is like a personal bank account you control directly, while a contract account is like an automated corporate account that can only move money according to pre-written rules.
+
+---
+
+#### 🧑‍💼 EOA (Externally Owned Account)
+
+**Analogy: Your personal savings/checking account**
+
+- You control it with your signature → like signing a cheque or authorizing a transaction with your PIN
+- Money moves only when **you explicitly approve** it
+- No internal logic — it just sends and receives money
+
+**Blockchain mapping:**
+- Controlled by a private key
+- Can initiate transactions
+- No code, just balance + nonce
+
+---
+
+#### 🏢 Contract Account
+
+**Analogy: A corporate bank account with standing instructions (or an automated escrow)**
+
+- No human "signs" transactions directly
+- Money moves only when **predefined rules are satisfied** (e.g., "release funds after both parties approve")
+- Cannot act on its own — it **reacts** when someone triggers it
+
+**Blockchain mapping:**
+- Controlled by code
+- Cannot initiate transactions by itself
+- Executes logic when called
+
+---
+
+#### Why Do We Need Both?
+
+**One subtle but important point:** A contract account never "decides" to send money — it only executes instructions when someone calls it.
+
+**Bank analogy:** A corporate account won't randomly transfer funds. Someone submits a request, and the bank checks the rules before executing it.
+
+**The separation:** Blockchain separates **identity** (EOA) from **automation** (contracts) — like separating a person from the company policies they operate under.
+
+<Aside type="tip">
+**Quick reference:**
+- **EOA** = human-controlled account (signs transactions)
+- **Contract** = rule-controlled account (executes code)
+</Aside>
+
+
+
 ### Nonce: Preventing Replay Attacks
 
-The `nonce` field is critical for security:
+The `nonce` field is critical for security.
+
+> **Core analogy:**
+> A nonce is like a cheque number — the bank will only process each cheque number once, so you can't reuse an old signed cheque to withdraw money again.
+
+---
+
+#### 🧾 Cheque Number (Banking)
+
+- Every cheque has a unique, increasing number
+- The bank records the last used number
+- Reusing an old cheque = **rejected**
+- Skipping ahead is allowed, but going backward isn't
+
+#### 🔢 Nonce (Blockchain)
+
+- Every account has a nonce (transaction counter)
+- Each transaction must use the **next** nonce
+- Replaying an old signed transaction = **rejected**
+- Ensures transactions execute **once** and **in order**
+
+---
 
 ```rust
 impl Account {
@@ -281,7 +369,122 @@ pub struct Transaction {
 }
 ```
 
+### Understanding Gas: `gas_limit` and `gas_price`
+
+> **Core analogy:**
+> Gas is like a **wire transfer fee** — you set a maximum budget (`gas_limit`) and a rate you're willing to pay (`gas_price`). The bank charges you only for the actual work done, up to your limit.
+
+---
+
+#### 🏦 Wire Transfer Fee (Banking)
+
+- **Fee cap**: "I'll pay up to $50 for this transfer"
+- **Priority rate**: Standard ($5), Express ($15), Urgent ($30)
+- **Actual charge**: Bank charges based on complexity, but never exceeds your cap
+- **If cap too low**: Transfer is rejected ("insufficient fee budget")
+
+#### ⛽ Gas (Blockchain)
+
+- **`gas_limit`**: Maximum gas units you're willing to consume
+- **`gas_price`**: How much you pay per gas unit (higher = faster inclusion)
+- **Actual cost**: `gas_used × gas_price` (refund unused gas)
+- **If limit too low**: Transaction fails ("out of gas"), but fees are still consumed
+
+---
+
+#### Why Two Numbers? Why Not Just a Single Fee?
+
+> **Question:** Can't we just say "I'll pay $10 for this transaction" instead of `gas_limit` × `gas_price`?
+
+**The key insight:** These two numbers measure **different things**.
+
+| Field | What It Measures | Who Controls It |
+|-------|------------------|-----------------|
+| `gas_limit` | **Computation** — how much work | The operation itself (deterministic) |
+| `gas_price` | **Priority** — how fast you want it | You (market-driven) |
+
+---
+
+**🏦 Banking Analogy:**
+
+Think of it like shipping a package:
+
+- **Weight/Size** (gas_limit) = How big is your package? A letter vs a refrigerator need different resources.
+- **Shipping Speed** (gas_price) = Standard, Express, or Overnight? You choose based on urgency.
+
+You can't combine these into one number because:
+- A **small package sent overnight** (low gas, high price) costs differently than
+- A **huge package sent standard** (high gas, low price)
+
+---
+
+**Why separation matters:**
+
+1. **Refunds work** — You set gas_limit=100,000 but only use 21,000? You get 79,000 × gas_price back. A single fee = no refunds.
+
+2. **Predictable estimation** — Gas for a transfer is always ~21,000. Gas for a complex contract call might be 500,000. You can estimate this *before* choosing your price.
+
+3. **Market flexibility** — Network busy? Raise gas_price, not gas_limit. Your operation doesn't need more computation, just faster inclusion.
+
+4. **Prevents overpaying** — Single fee = you'd always pay maximum. Two numbers = pay only for actual work done.
+
+---
+
+#### Wait — Isn't Gas Fixed for Simple Transfers?
+
+**Yes!** For EOA → EOA transfers (no contract code), gas is **always 21,000**. It's deterministic:
+
+```
+Verify signature → Check balance → Transfer value → Increment nonce
+```
+
+Same steps every time = same gas every time.
+
+**So why have `gas_limit` at all?**
+
+| Transaction Type | Gas Usage |
+|------------------|-----------|
+| EOA → EOA transfer | Fixed: 21,000 |
+| Contract deployment | Variable: depends on bytecode size |
+| Contract call | Variable: depends on code execution path |
+
+The `Transaction` struct handles **all** types. For simple transfers, `gas_limit = 21,000` is just a formality. For contract interactions, it's crucial — the same function might use 50,000 or 500,000 gas depending on inputs and state.
+
+<Aside type="tip">
+**Rule of thumb:**
+- Simple transfer? `gas_limit = 21,000` (fixed, no thinking needed)
+- Contract call? Estimate first, then add ~20% buffer
+</Aside>
+
+---
+
+#### Why Gas Exists
+
+| Problem | How Gas Solves It |
+|---------|-------------------|
+| Infinite loops in contracts | Execution stops when gas runs out |
+| Spam transactions | Every operation costs money |
+| Resource fairness | Users pay for computation they consume |
+| Miner/validator incentives | Gas fees reward block producers |
+
+---
+
+#### Quick Reference
+
+| Field | What It Means | Banking Equivalent |
+|-------|---------------|-------------------|
+| `gas_limit` | Max gas you'll spend | Fee budget cap |
+| `gas_price` | Cost per gas unit | Priority/speed tier |
+| `gas_used` | Actual gas consumed | Actual fee charged |
+| `gas_limit × gas_price` | Max possible cost | Worst-case fee |
+
+<Aside type="caution">
+**Important:** If a transaction fails (e.g., out of gas, contract reverts), you still pay for the gas consumed up to the failure point. It's like a wire transfer that fails halfway — the bank still charges processing fees.
+</Aside>
+
 ### Transaction Types
+
+A blockchain supports three fundamental operations, all using the same `Transaction` struct:
 
 ```rust
 // 1. Value Transfer
@@ -293,6 +496,100 @@ let deploy = Transaction::deploy(from, bytecode, nonce, gas_limit, gas_price);
 // 3. Contract Call
 let call = Transaction::call(from, contract, calldata, value, nonce, gas_limit, gas_price);
 ```
+
+---
+
+#### 1️⃣ Value Transfer (EOA → EOA)
+
+> **Banking analogy:** A simple bank transfer — move money from your account to someone else's.
+
+| Field | Value | Meaning |
+|-------|-------|---------|
+| `to` | Recipient address | Who receives the money |
+| `value` | Amount | How much to send |
+| `data` | Empty (`[]`) | No instructions needed |
+| `gas_limit` | 21,000 (fixed) | Always the same |
+
+**What happens:**
+```
+1. Verify signature ✓
+2. Check sender.balance ≥ value + gas_fees ✓
+3. sender.balance -= value
+4. recipient.balance += value
+5. sender.nonce += 1
+```
+
+---
+
+#### 2️⃣ Contract Deployment
+
+> **Banking analogy:** Opening a new automated escrow account with specific rules. You're not sending money to someone — you're creating a new rule-based account.
+
+| Field | Value | Meaning |
+|-------|-------|---------|
+| `to` | `None` | **No recipient** — signals deployment |
+| `value` | Usually 0 | Initial balance for contract (optional) |
+| `data` | Bytecode | The contract's compiled code |
+| `gas_limit` | Variable | Depends on bytecode size + initialization |
+
+**What happens:**
+```
+1. Verify signature ✓
+2. Compute contract address = hash(sender, nonce)
+3. Create new account at that address
+4. Store bytecode in contract account
+5. Execute constructor (initialization code)
+6. sender.nonce += 1
+```
+
+**Key insight:** The contract address is deterministic — you can know it *before* deploying!
+
+---
+
+#### 3️⃣ Contract Call
+
+> **Banking analogy:** Triggering a standing instruction on a corporate account. You send a request (and optionally money), and the account's pre-programmed rules execute.
+
+| Field | Value | Meaning |
+|-------|-------|---------|
+| `to` | Contract address | Which contract to interact with |
+| `value` | Optional | Send money along with the call |
+| `data` | Calldata | Function selector + encoded arguments |
+| `gas_limit` | Variable | Depends on what the code does |
+
+**What happens:**
+```
+1. Verify signature ✓
+2. Load contract code from `to` address
+3. Execute code with `data` as input
+4. Code may: read/write storage, send funds, call other contracts
+5. If success: state changes persist
+6. If failure: all changes reverted (but gas still consumed!)
+```
+
+---
+
+#### Quick Comparison
+
+| | Transfer | Deploy | Call |
+|--|----------|--------|------|
+| **`to`** | Recipient | `None` | Contract |
+| **`data`** | Empty | Bytecode | Calldata |
+| **`value`** | Amount | Initial balance | Payment to contract |
+| **Gas** | Fixed (21k) | Variable | Variable |
+| **Creates account?** | No* | Yes | No |
+| **Executes code?** | No | Constructor only | Yes |
+
+*\*Transfer creates recipient account if it doesn't exist (with zero code)*
+
+<Aside type="note">
+**How does the blockchain know which type?**
+- `to == None` → Deployment
+- `to == EOA` (no code) → Transfer
+- `to == Contract` (has code) → Call
+
+The `data` field confirms intent: empty for transfers, bytecode for deploy, calldata for calls.
+</Aside>
 
 ### Signing Transactions
 
