@@ -50,11 +50,23 @@ cargo run -p minichain-cli
 
 ## Documentation
 
+### Local Development
+
 ```bash
 cd docs
 bun install
 bun run dev      # http://localhost:4321
 ```
+
+### Docker
+
+```bash
+cd docs
+docker build -t minichain-docs .
+docker run -p 8080:8080 minichain-docs
+```
+
+Visit http://localhost:8080 to view the docs.
 
 ## Status
 

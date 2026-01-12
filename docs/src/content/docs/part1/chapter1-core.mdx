@@ -484,7 +484,71 @@ The `Transaction` struct handles **all** types. For simple transfers, `gas_limit
 
 ### Transaction Types
 
-A blockchain supports three fundamental operations, all using the same `Transaction` struct:
+A blockchain supports three fundamental operations, all using the same `Transaction` struct.
+
+#### Why Three Types? The Human-Machine Perspective
+
+Every blockchain transaction is initiated by a **human** (EOA). Machines (contracts) cannot act on their own — they only react when triggered. This gives us a natural categorization:
+
+| From | To | Type | What Happens |
+|------|-----|------|--------------|
+| Human | Human | **Transfer** | Money moves, nothing else |
+| Human | New Machine | **Deploy** | A new autonomous program is born |
+| Human | Existing Machine | **Call** | The machine wakes up and executes its code |
+
+Notice what's missing: **Machine → Anyone** as an initiating transaction. Contracts can send funds or call other contracts, but only *during* execution of a human-initiated transaction. A contract sitting idle will never "decide" to do something.
+
+<Aside type="note" title="Why Can't Machines Initiate?">
+This isn't a limitation — it's a fundamental design choice. Two parallels from computing:
+
+**1. The Browser Event Loop**
+
+JavaScript in your browser doesn't run continuously. It sits idle, waiting:
+```
+[idle] → user clicks button → [execute handler] → [idle] → user types → [execute handler] → [idle]
+```
+The code exists, but it only runs in response to human input. A webpage can't decide "I'll submit this form at 3 AM" without a human first setting that up.
+
+*"But what about `setTimeout`?"* — Good question. `setTimeout(() => doSomething(), 5000)` seems autonomous, but:
+- A human loaded the page (initiating the runtime)
+- A human's action (or page load) executed the code that *scheduled* the timeout
+- The browser must stay open — close it, and the timeout dies
+- There's a persistent runtime (the browser process) actively watching the clock
+
+Blockchains have no persistent runtime. There's no daemon thinking "is it time yet?" between blocks. The chain only "wakes up" when someone submits a transaction. `setTimeout` works because the browser is always running in the background; contracts have no background.
+
+**2. CPU and I/O**
+
+A CPU doesn't spontaneously read from disk. It executes instructions, and those instructions must originate from somewhere — ultimately, a human pressing the power button, launching a program, or triggering an action. Even "scheduled tasks" were scheduled by a human.
+
+**Contracts work the same way:**
+```
+[idle] → human sends transaction → [execute code] → [idle] → human sends transaction → [execute code]
+```
+
+A contract might *want* to do something (e.g., "release funds after 30 days"), but it cannot wake itself up. Someone must send a transaction to trigger the check. This is why "keeper" services exist — humans (or bots run by humans) that poke contracts to execute time-sensitive logic.
+</Aside>
+
+**Why this matters:**
+
+1. **Transfer (Human → Human)**: The simplest case. No code runs. Just update two balances. This is like handing cash to a friend — no intermediary, no rules, just value moving.
+
+2. **Deploy (Human → New Machine)**: You're creating an autonomous agent that will live on the blockchain forever. It's not sending money *to* someone — it's bringing something *into existence*. That's why `to` is `None` — there's no recipient yet; you're creating one.
+
+3. **Call (Human → Existing Machine)**: You're waking up a sleeping program. The machine reads your input (`data`), possibly accepts your payment (`value`), executes its logic, and may trigger a chain reaction (calling other machines, sending funds, updating storage).
+
+<Aside type="tip" title="The Subtle Insight">
+Contracts are "second-class citizens" in terms of agency. They can hold money, enforce rules, and interact with the world — but only when a human pulls the trigger. This is a security feature: no autonomous infinite loops draining accounts at 3 AM.
+</Aside>
+
+#### One Struct, Three Interpretations
+
+Rather than three separate structs, we use **one struct with different interpretations**:
+- `to = None` → Deployment (no recipient — you're creating one)
+- `to = EOA` → Transfer (recipient has no code)
+- `to = Contract` → Call (recipient has code, execute it)
+
+This keeps the protocol simple while supporting all use cases:
 
 ```rust
 // 1. Value Transfer
