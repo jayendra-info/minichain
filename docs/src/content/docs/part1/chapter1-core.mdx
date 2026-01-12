@@ -418,7 +418,7 @@ You can't combine these into one number because:
 
 ---
 
-**Why separation matters:**
+##### Why separation matters
 
 1. **Refunds work** — You set gas_limit=100,000 but only use 21,000? You get 79,000 × gas_price back. A single fee = no refunds.
 
@@ -529,7 +529,7 @@ A CPU doesn't spontaneously read from disk. It executes instructions, and those 
 A contract might *want* to do something (e.g., "release funds after 30 days"), but it cannot wake itself up. Someone must send a transaction to trigger the check. This is why "keeper" services exist — humans (or bots run by humans) that poke contracts to execute time-sensitive logic.
 </Aside>
 
-**Why this matters:**
+##### Why this matters
 
 1. **Transfer (Human → Human)**: The simplest case. No code runs. Just update two balances. This is like handing cash to a friend — no intermediary, no rules, just value moving.
 
@@ -698,6 +698,27 @@ pub fn contract_address(&self) -> Option<Address> {
 This means you can predict contract addresses before deployment! This enables patterns like counterfactual instantiation.
 </Aside>
 
+<Aside type="tip" title="Trivia: What's NOT in the Address?">
+Notice the formula: `address = hash(sender + nonce)` — the **bytecode is not included**.
+
+*"Does this mean identical contracts get the same address?"* — No!
+
+| Scenario | Result |
+|----------|--------|
+| Same person deploys same contract twice | **Different addresses** (nonce increments) |
+| Two people deploy identical contracts | **Different addresses** (different senders) |
+
+You can deploy unlimited copies of the same logic — each gets a unique address. This is intentional:
+- **Multiple instances** — Deploy 10 token contracts with same code, different state
+- **No race conditions** — Two people deploying identical code don't collide
+
+**Ethereum's CREATE2** is an alternative that *does* include bytecode:
+```
+address = hash(0xff + sender + salt + hash(bytecode))
+```
+This gives deterministic addresses for the same code (useful for cross-chain deployments). Our implementation uses the simpler CREATE formula.
+</Aside>
+
 ---
 
 ## 1.5 Blocks
@@ -709,16 +730,260 @@ A block packages transactions into an ordered, tamper-evident unit.
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockHeader {
-    pub height: u64,           // Block number
-    pub timestamp: u64,        // Unix timestamp
-    pub prev_hash: Hash,       // Link to parent
-    pub merkle_root: Hash,     // Transaction summary
-    pub state_root: Hash,      // World state after block
-    pub author: Address,       // Block producer
-    pub difficulty: u64,       // Always 1 for PoA
-    pub nonce: u64,            // Unused in PoA
+    pub height: u64,
+    pub timestamp: u64,
+    pub prev_hash: Hash,
+    pub merkle_root: Hash,
+    pub state_root: Hash,
+    pub author: Address,
+    pub difficulty: u64,
+    pub nonce: u64,
 }
 ```
+
+
+
+### Need of `height` and `timestamp`
+
+Straightforward — block number (0-indexed from genesis) and Unix timestamp when the block was produced.
+
+---
+
+### `prev_hash` — The Chain Link
+
+Hash of the previous block's header. This is what makes it a *chain* — each block cryptographically commits to its parent. Tamper with any historical block → all subsequent hashes change → immediately detectable.
+
+---
+
+### `merkle_root` — Transaction Commitment
+
+A block can contain hundreds of transactions, but we represent them with a single 32-byte hash:
+
+```
+Tx0   Tx1   Tx2   Tx3        ← 4 transactions
+ ↓     ↓     ↓     ↓
+H0    H1    H2    H3         ← hash each one
+  \  /        \  /
+   H01         H23           ← hash pairs together
+      \       /
+       merkle_root           ← single hash commits to ALL transactions
+```
+
+Change any transaction → the root changes. This is a **merkle tree** — we'll cover it in detail in [section 1.6](#16-merkle-trees).
+
+---
+
+### `state_root` — World State Commitment and the need of it.
+
+While `merkle_root` commits to the **inputs** (transactions), `state_root` commits to the **outputs** (resulting world state after execution).
+
+```
+Before Block 5:                     After Block 5:
+┌──────────────────┐               ┌──────────────────┐
+│ Alice: 100 coins │               │ Alice: 70 coins  │  ← sent 30
+│ Bob:   50 coins  │  ──[txs]───►  │ Bob:   80 coins  │  ← received 30
+│ Contract X: ...  │               │ Contract X: ...  │
+└──────────────────┘               └──────────────────┘
+        ↓                                  ↓
+   state_root_4                       state_root_5
+```
+
+
+
+| Use Case | How state_root Helps |
+|----------|---------------------|
+| **Consensus** | Nodes must agree on the *result*, not just the transactions. Same txs must produce same state_root, or something's wrong. |
+| **Light clients** | Ask "What's Alice's balance?" → get merkle proof against state_root. No need to download all accounts. |
+| **State sync** | New node downloads current state, verifies against latest state_root. No need to replay all history from genesis. |
+| **Detecting bugs** | If two nodes get different state_roots from same transactions → non-determinism bug (serious!). |
+
+**The key insight:** `merkle_root` proves "these transactions were included." `state_root` proves "executing them produced this exact world state."
+
+**Is it built the same way as merkle_root?**
+
+Both are merkle roots, but the underlying structure differs:
+
+| | `merkle_root` | `state_root` |
+|--|---------------|--------------|
+| **Data** | List of transactions | Map of address → account |
+| **Structure** | Simple merkle tree | Merkle Patricia Trie |
+| **Access** | Sequential (all txs) | Key-value lookup (by address) |
+| **Updates** | Build fresh each block | Incremental (only changed accounts) |
+
+Transactions are a **list** — simple merkle tree works. Accounts are a **key-value map** with millions of entries — needs a **trie** (prefix tree) for efficient lookups and partial updates.
+
+**Why this matters: No need to replay history!**
+
+Without `state_root`, answering "What's Alice's balance?" would require:
+```
+Start at genesis → replay Block 1 → replay Block 2 → ... → replay Block 1,000,000
+"Alice has 70 coins"
+```
+
+With `state_root`, you just:
+```
+Look up Alice in current state trie → verify proof against state_root
+"Alice has 70 coins" ✓
+```
+
+The entire history is "compressed" into the latest state. You don't trace back — you look up directly.
+
+We'll explore the state trie implementation in [Chapter 2: Storage](/part2/chapter2-storage).
+
+---
+
+### `author` — Block Producer
+
+In a single-authority PoA, you might wonder: "We know who the authority is, why store `author`?"
+
+**Single authority:** Technically redundant — every block is signed by the same authority.
+
+**Multiple rotating authorities:**
+```
+Authorities = [Alice, Bob, Carol]
+Block 0 → Alice's turn
+Block 1 → Bob's turn
+Block 2 → Carol's turn
+```
+
+Even here, you *could* derive author from `height % num_authorities`. But explicit `author` helps when:
+
+| Scenario | Why author is useful |
+|----------|---------------------|
+| **Authority skips slot** | If Bob is offline, Alice produces block 1 instead. Can't derive from height. |
+| **Dynamic authority set** | Authorities added/removed over time. History needs to record who actually signed. |
+| **Self-describing blocks** | Block makes sense without external context (which authority set was active at that height?). |
+
+**Also: Ed25519 requires it.** Unlike secp256k1 (Ethereum), you can't recover the public key from an Ed25519 signature. So we need `author` to look up the correct public key for verification.
+
+We'll decide between single vs rotating authorities when implementing the consensus layer in [Chapter 5](/part5/chapter5-chain).
+
+---
+
+### `difficulty` and `nonce` — PoW Artifacts
+
+These fields are **Proof of Work** concepts that don't really apply to PoA:
+
+**In PoW (Bitcoin, old Ethereum):**
+```
+difficulty = how hard the mining puzzle is
+nonce = the value miners iterate to solve: hash(block + nonce) < target
+```
+
+Miners burn electricity trying billions of nonces until they find a valid hash. Higher difficulty = more attempts needed.
+
+**In PoA:** No puzzle. The authority just signs. Both fields are meaningless.
+
+**So why include them?**
+
+Some PoA chains repurpose `difficulty`:
+
+| Chain | Repurposed meaning |
+|-------|-------------------|
+| **Clique (Geth)** | `2` = in-turn validator, `1` = out-of-turn (helps fork choice) |
+| **Aura (Parity)** | Step number in rotation |
+
+**For minichain:** We keep them as placeholders for now. A truly minimal PoA chain could remove both — we may do so once we finalize the consensus design in [Chapter 5](/part5/chapter5-chain).
+
+---
+
+### Block Size: How Many Transactions Fit?
+
+A block can't grow forever — we need limits. Different blockchains use different approaches:
+
+| Approach | How It Works | Used By |
+|----------|--------------|---------|
+| **Byte size** | Raw data limit (e.g., 1MB) | Bitcoin |
+| **Gas limit** | Total computation budget per block | Ethereum |
+| **Transaction count** | Direct cap on number of txs | Some chains |
+
+**Why gas limit is the best fit for smart contract chains:**
+
+| Limit Type | Problem |
+|------------|---------|
+| Max transactions | 1000 complex contract calls could take minutes to execute |
+| Max bytes | Small bytecode can still have expensive infinite loops |
+| **Max gas** | Directly limits computation time, regardless of tx count or size |
+
+With a block gas limit, the math becomes predictable:
+
+```
+BLOCK_GAS_LIMIT = 30,000,000
+
+Block can fit:
+├─ ~1,428 simple transfers (21,000 gas each)
+├─ OR ~60 complex contract calls (500,000 gas each)
+└─ OR any mix where total_gas ≤ 30M
+```
+
+**The block producer's algorithm:**
+
+```rust
+while let Some(tx) = mempool.next_by_gas_price() {
+    if block.total_gas() + tx.gas_limit <= BLOCK_GAS_LIMIT {
+        block.add(tx);
+    }
+}
+```
+
+Higher `gas_price` = picked first. This is why fees spike when the network is busy — users outbid each other for limited block space.
+
+<Aside type="note" title="What's a Mempool?">
+When you submit a transaction, it doesn't go directly into a block. It enters the **mempool** (memory pool) — a waiting room for pending transactions.
+
+```
+User submits tx → [Mempool] → Block producer picks txs → [Block]
+                     ↑
+            Other pending txs waiting here
+```
+
+**Message Queue Analogy:**
+
+If you've used RabbitMQ, Kafka, or AWS SQS, the mempool works similarly:
+
+| Message Queue | Blockchain Mempool |
+|---------------|-------------------|
+| Producer submits job | User submits transaction |
+| Queue holds pending jobs | Mempool holds pending txs |
+| Worker picks jobs (FIFO or priority) | Block producer picks txs (by `gas_price`) |
+| Job gets processed | Transaction gets included in block |
+| Acknowledgment | Transaction confirmed on-chain |
+
+The key difference: in a message queue, workers typically process jobs FIFO (first-in-first-out). In a mempool, it's a **priority queue** — whoever pays the highest `gas_price` jumps the line.
+
+**What if the mempool is nearly empty?**
+
+Unlike message queues that might wait for a batch to fill, blockchains are **time-driven, not fullness-driven**:
+
+```
+Block interval = 12 seconds
+
+├─ Mempool has 1000 txs? → Produce block with top txs up to gas limit
+├─ Mempool has 5 txs?    → Produce block with those 5 txs
+└─ Mempool is empty?     → Produce empty block (still valid!)
+```
+
+*Think of it like a scheduled bus:* the bus leaves at 9:00 AM whether it's packed or has one passenger. Waiting for a "full" bus would make arrival times unpredictable.
+
+**Why not wait for a full block?**
+- **Liveness** — users expect predictable confirmation times
+- **Consensus** — fixed intervals simplify block timing and validation
+- **Empty blocks are cheap** — a block with no transactions still advances the chain, updates timestamps, and maintains heartbeat
+
+**Why do we need it?**
+- **Blocks aren't instant** — transactions arrive continuously, but blocks are produced periodically (e.g., every 12 seconds)
+- **Prioritization** — producers pick highest `gas_price` first, so the mempool must be sortable
+- **Validation staging** — basic checks (valid signature, sufficient balance) happen before entering the mempool
+- **Network propagation** — nodes share their mempools so transactions reach block producers
+
+**Without a mempool:** You'd need to produce a block for every single transaction — no batching, no prioritization, extremely inefficient.
+
+We'll implement the mempool in [Chapter 5](/part5/chapter5-chain) as part of the chain orchestration layer.
+</Aside>
+
+<Aside type="tip">
+In minichain, the block gas limit would be enforced in the consensus layer when validating blocks. The `Block::total_gas_limit()` method sums all transaction gas limits for this check.
+</Aside>
 
 ### The Chain of Blocks
 
