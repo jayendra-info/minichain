@@ -1,0 +1,1031 @@
+---
+title: "Chapter 3: Register-Based VM"
+description: Building the virtual machine for smart contract execution
+---
+
+import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+In [Chapter 2](/part2/chapter2-storage), we built persistent storage for accounts and blocks. Now we need something to actually *execute* smart contract code. That's the **virtual machine** — the computational engine at the heart of our blockchain.
+
+## What We're Building
+
+By the end of this chapter, you'll have implemented:
+
+| Module | Purpose |
+|--------|---------|
+| `opcodes.rs` | Instruction set definition (60+ opcodes) |
+| `memory.rs` | Registers, stack, and linear memory |
+| `gas.rs` | Gas metering and cost tables |
+| `executor.rs` | The fetch-decode-execute loop |
+| `tracer.rs` | Execution tracing for debugging |
+
+---
+
+## What is a Virtual Machine?
+
+A virtual machine (VM) is a software implementation of a computer. Instead of running machine code on physical silicon, it interprets **bytecode** — a compact binary representation of instructions.
+
+### The CPU Analogy
+
+| Physical CPU | Blockchain VM |
+|--------------|---------------|
+| Transistors on silicon | Rust code |
+| x86/ARM machine code | Custom bytecode |
+| Registers (RAX, RBX, etc.) | Virtual registers (R0-R15) |
+| RAM | Linear memory buffer |
+| Disk I/O | Storage (SLOAD/SSTORE) |
+| Clock cycles | Gas units |
+
+<Aside type="tip" title="Why a VM?">
+Why not compile contracts to native code?
+
+1. **Portability** — The same bytecode runs on any node (Linux, Mac, Windows)
+2. **Determinism** — Every node must compute the exact same result
+3. **Sandboxing** — Contracts can't access the host filesystem or network
+4. **Metering** — We can count exactly how much computation each instruction costs
+</Aside>
+
+---
+
+## Stack vs Register Architecture
+
+There are two main VM designs:
+
+### Stack-Based (like Ethereum's EVM)
+
+Operations pop operands from a stack and push results back:
+
+```
+PUSH 3      ; stack: [3]
+PUSH 4      ; stack: [3, 4]
+ADD         ; pops 3 and 4, pushes 7 → stack: [7]
+```
+
+**Pros:** Simple to implement, compact bytecode
+**Cons:** Lots of stack manipulation, harder to optimize
+
+### Register-Based (like our VM, Lua, Dalvik)
+
+Operations specify source and destination registers explicitly:
+
+```
+LOAD R0, 3    ; R0 = 3
+LOAD R1, 4    ; R1 = 4
+ADD R2, R0, R1  ; R2 = R0 + R1 = 7
+```
+
+**Pros:** Fewer instructions, easier to optimize, maps well to real CPUs
+**Cons:** Larger instruction encoding (need register numbers)
+
+### Why We Choose Register-Based
+
+| Factor | Stack-Based | Register-Based |
+|--------|-------------|----------------|
+| Instructions per operation | More (push/pop overhead) | Fewer |
+| Bytecode size | Smaller | Larger |
+| Optimization potential | Harder | Easier |
+| Debugging clarity | Stack is implicit | Registers are explicit |
+| CPU similarity | Less similar | More similar |
+
+For a learning project, register-based is more intuitive. When you see `ADD R2, R0, R1`, you know exactly what's happening. With a stack VM, you need to mentally track the stack state.
+
+<Aside type="note">
+Ethereum chose stack-based because it produces smaller bytecode (important when every byte costs gas to store on-chain). We prioritize clarity over compactness.
+</Aside>
+
+---
+
+## 3.1 Architecture Overview
+
+Our VM has three main components:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         VM State                             │
+├─────────────────┬──────────────────┬────────────────────────┤
+│   Registers     │     Stack        │      Memory            │
+│   R0-R15        │   (call frames)  │   (linear buffer)      │
+│   64-bit each   │                  │                        │
+├─────────────────┴──────────────────┴────────────────────────┤
+│                     Program Counter (PC)                     │
+│                     Gas Remaining                            │
+├─────────────────────────────────────────────────────────────┤
+│                   Bytecode (read-only)                       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ SLOAD/SSTORE
+                              ▼
+                    ┌─────────────────┐
+                    │  Contract       │
+                    │  Storage        │
+                    │  (from Ch. 2)   │
+                    └─────────────────┘
+```
+
+### Registers
+
+We have **16 general-purpose registers** (R0-R15), each holding a 64-bit unsigned integer:
+
+```rust
+pub const NUM_REGISTERS: usize = 16;
+
+pub struct Registers {
+    values: [u64; NUM_REGISTERS],
+}
+
+impl Registers {
+    pub fn new() -> Self {
+        Self { values: [0; NUM_REGISTERS] }
+    }
+
+    pub fn get(&self, r: u8) -> u64 {
+        self.values[r as usize % NUM_REGISTERS]
+    }
+
+    pub fn set(&mut self, r: u8, value: u64) {
+        self.values[r as usize % NUM_REGISTERS] = value;
+    }
+}
+```
+
+<Aside type="tip" title="Why 16 Registers?">
+16 registers can be addressed with 4 bits. This keeps instruction encoding compact while providing enough registers for most computations without spilling to memory.
+
+- R0-R11: General purpose
+- R12: Often used as frame pointer
+- R13: Often used as stack pointer
+- R14: Link register (return address)
+- R15: Program counter (read-only via instructions)
+</Aside>
+
+### Memory
+
+Linear memory is a byte-addressable buffer that grows on demand:
+
+```rust
+pub struct Memory {
+    data: Vec<u8>,
+    max_size: usize,
+}
+
+impl Memory {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            data: Vec::new(),
+            max_size,
+        }
+    }
+
+    /// Read a byte from memory.
+    pub fn load8(&self, offset: u32) -> u8 {
+        self.data.get(offset as usize).copied().unwrap_or(0)
+    }
+
+    /// Write a byte to memory, growing if needed.
+    pub fn store8(&mut self, offset: u32, value: u8) -> Result<(), VmError> {
+        let offset = offset as usize;
+        if offset >= self.max_size {
+            return Err(VmError::MemoryOverflow);
+        }
+        if offset >= self.data.len() {
+            self.data.resize(offset + 1, 0);
+        }
+        self.data[offset] = value;
+        Ok(())
+    }
+}
+```
+
+### Program Counter
+
+The **program counter (PC)** points to the next instruction to execute:
+
+```rust
+pub struct Vm {
+    pub registers: Registers,
+    pub memory: Memory,
+    pub pc: usize,           // Program counter
+    pub gas_remaining: u64,  // Gas left
+    pub bytecode: Vec<u8>,   // The contract code
+    pub halted: bool,        // Has execution stopped?
+}
+```
+
+---
+
+## 3.2 Instruction Encoding
+
+Each instruction is encoded as a sequence of bytes. The first byte is the **opcode**, followed by operands.
+
+### Encoding Formats
+
+We use three main formats:
+
+| Format | Bytes | Example | Description |
+|--------|-------|---------|-------------|
+| **R** | 1 + 1 | `HALT` | No operands |
+| **RR** | 1 + 1 | `NOT R0` | One register |
+| **RRR** | 1 + 2 | `ADD R0, R1, R2` | Two or three registers |
+| **RI** | 1 + 1 + 8 | `LOADI R0, 12345` | Register + immediate value |
+
+```
+ADD instruction (3 bytes):
+┌────────┬────────┬────────┐
+│ opcode │ dst|s1 │ s2|pad │
+│  0x01  │  0x01  │  0x20  │
+└────────┴────────┴────────┘
+         R0  R1    R2
+
+dst = destination register (4 bits)
+s1  = source register 1 (4 bits)
+s2  = source register 2 (4 bits)
+pad = padding (4 bits)
+```
+
+### Opcode Layout
+
+We organize opcodes into categories:
+
+| Range | Category | Examples |
+|-------|----------|----------|
+| 0x00-0x0F | Control | HALT, NOP, JUMP, CALL, RET |
+| 0x10-0x1F | Arithmetic | ADD, SUB, MUL, DIV, MOD |
+| 0x20-0x2F | Bitwise | AND, OR, XOR, NOT, SHL, SHR |
+| 0x30-0x3F | Comparison | EQ, NE, LT, GT, LE, GE |
+| 0x40-0x4F | Memory | LOAD8, LOAD64, STORE8, STORE64 |
+| 0x50-0x5F | Storage | SLOAD, SSTORE |
+| 0x60-0x6F | Stack | PUSH, POP |
+| 0x70-0x7F | Immediate | LOADI, ADDI |
+| 0x80-0x8F | Context | CALLER, CALLVALUE, ADDRESS |
+| 0xF0-0xFF | Debug | LOG, TRACE |
+
+---
+
+## 3.3 Opcode Definitions
+
+Let's define our instruction set:
+
+```rust
+// crates/vm/src/opcodes.rs
+
+/// All VM opcodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Opcode {
+    // =========== Control Flow (0x00-0x0F) ===========
+    /// Stop execution successfully
+    HALT = 0x00,
+    /// Do nothing
+    NOP = 0x01,
+    /// Unconditional jump: PC = R[src]
+    JUMP = 0x02,
+    /// Conditional jump: if R[cond] != 0, PC = R[target]
+    JUMPI = 0x03,
+    /// Call subroutine: push return address, jump to R[target]
+    CALL = 0x04,
+    /// Return from subroutine: pop return address, jump to it
+    RET = 0x05,
+    /// Revert execution with error
+    REVERT = 0x0F,
+
+    // =========== Arithmetic (0x10-0x1F) ===========
+    /// R[dst] = R[s1] + R[s2]
+    ADD = 0x10,
+    /// R[dst] = R[s1] - R[s2]
+    SUB = 0x11,
+    /// R[dst] = R[s1] * R[s2]
+    MUL = 0x12,
+    /// R[dst] = R[s1] / R[s2] (unsigned, traps on div by zero)
+    DIV = 0x13,
+    /// R[dst] = R[s1] % R[s2] (unsigned modulo)
+    MOD = 0x14,
+    /// R[dst] = R[s1] + immediate
+    ADDI = 0x15,
+
+    // =========== Bitwise (0x20-0x2F) ===========
+    /// R[dst] = R[s1] & R[s2]
+    AND = 0x20,
+    /// R[dst] = R[s1] | R[s2]
+    OR = 0x21,
+    /// R[dst] = R[s1] ^ R[s2]
+    XOR = 0x22,
+    /// R[dst] = ~R[src]
+    NOT = 0x23,
+    /// R[dst] = R[s1] << R[s2]
+    SHL = 0x24,
+    /// R[dst] = R[s1] >> R[s2] (logical shift)
+    SHR = 0x25,
+
+    // =========== Comparison (0x30-0x3F) ===========
+    /// R[dst] = R[s1] == R[s2] ? 1 : 0
+    EQ = 0x30,
+    /// R[dst] = R[s1] != R[s2] ? 1 : 0
+    NE = 0x31,
+    /// R[dst] = R[s1] < R[s2] ? 1 : 0 (unsigned)
+    LT = 0x32,
+    /// R[dst] = R[s1] > R[s2] ? 1 : 0 (unsigned)
+    GT = 0x33,
+    /// R[dst] = R[s1] <= R[s2] ? 1 : 0
+    LE = 0x34,
+    /// R[dst] = R[s1] >= R[s2] ? 1 : 0
+    GE = 0x35,
+    /// R[dst] = R[src] == 0 ? 1 : 0
+    ISZERO = 0x36,
+
+    // =========== Memory (0x40-0x4F) ===========
+    /// R[dst] = Memory[R[addr]] (1 byte)
+    LOAD8 = 0x40,
+    /// R[dst] = Memory[R[addr]] (8 bytes, little-endian)
+    LOAD64 = 0x41,
+    /// Memory[R[addr]] = R[src] (1 byte)
+    STORE8 = 0x42,
+    /// Memory[R[addr]] = R[src] (8 bytes, little-endian)
+    STORE64 = 0x43,
+    /// R[dst] = size of memory in bytes
+    MSIZE = 0x44,
+    /// Copy memory: memcpy(R[dst], R[src], R[len])
+    MCOPY = 0x45,
+
+    // =========== Storage (0x50-0x5F) ===========
+    /// R[dst] = Storage[R[key]] (persistent, 32-byte slot)
+    SLOAD = 0x50,
+    /// Storage[R[key]] = R[value] (persistent, 32-byte slot)
+    SSTORE = 0x51,
+
+    // =========== Immediate (0x70-0x7F) ===========
+    /// R[dst] = immediate_64bit
+    LOADI = 0x70,
+    /// R[dst] = R[src]
+    MOV = 0x71,
+
+    // =========== Context (0x80-0x8F) ===========
+    /// R[dst] = caller's address (as u64, truncated)
+    CALLER = 0x80,
+    /// R[dst] = value sent with this call
+    CALLVALUE = 0x81,
+    /// R[dst] = this contract's address
+    ADDRESS = 0x82,
+    /// R[dst] = current block number
+    BLOCKNUMBER = 0x83,
+    /// R[dst] = current block timestamp
+    TIMESTAMP = 0x84,
+    /// R[dst] = remaining gas
+    GAS = 0x85,
+
+    // =========== Debug (0xF0-0xFF) ===========
+    /// Log R[src] value (for debugging)
+    LOG = 0xF0,
+}
+```
+
+### Implementing Opcode Parsing
+
+```rust
+impl Opcode {
+    /// Try to parse a byte as an opcode.
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0x00 => Some(Opcode::HALT),
+            0x01 => Some(Opcode::NOP),
+            0x02 => Some(Opcode::JUMP),
+            // ... all other opcodes
+            0x10 => Some(Opcode::ADD),
+            0x11 => Some(Opcode::SUB),
+            // ...
+            _ => None,
+        }
+    }
+
+    /// Get the number of bytes this instruction consumes (including opcode).
+    pub fn instruction_size(&self) -> usize {
+        match self {
+            // No operands
+            Opcode::HALT | Opcode::NOP | Opcode::RET => 1,
+
+            // One register
+            Opcode::JUMP | Opcode::NOT | Opcode::LOG => 2,
+
+            // Two registers
+            Opcode::MOV | Opcode::LOAD8 | Opcode::STORE8 => 2,
+
+            // Three registers (packed into 2 bytes)
+            Opcode::ADD | Opcode::SUB | Opcode::MUL |
+            Opcode::DIV | Opcode::MOD | Opcode::AND |
+            Opcode::OR | Opcode::XOR | Opcode::SHL |
+            Opcode::SHR | Opcode::EQ | Opcode::NE |
+            Opcode::LT | Opcode::GT | Opcode::LE | Opcode::GE => 3,
+
+            // Register + 64-bit immediate
+            Opcode::LOADI => 10,  // 1 (opcode) + 1 (reg) + 8 (immediate)
+
+            // Default
+            _ => 2,
+        }
+    }
+}
+```
+
+---
+
+## 3.4 Gas Metering
+
+**Gas** prevents infinite loops and makes computation economically accountable. Every instruction costs gas. If you run out, execution halts.
+
+### The Gas Model
+
+```rust
+// crates/vm/src/gas.rs
+
+/// Gas costs for operations.
+pub struct GasCosts;
+
+impl GasCosts {
+    // Tier 1: Very cheap (simple register operations)
+    pub const ZERO: u64 = 0;       // HALT, NOP
+    pub const BASE: u64 = 2;       // ADD, SUB, AND, OR, MOV
+
+    // Tier 2: Cheap (more complex ALU operations)
+    pub const LOW: u64 = 3;        // MUL, comparison ops
+
+    // Tier 3: Medium (division, shifts)
+    pub const MID: u64 = 5;        // DIV, MOD, SHL, SHR
+
+    // Tier 4: Memory operations
+    pub const MEMORY_READ: u64 = 3;
+    pub const MEMORY_WRITE: u64 = 3;
+    pub const MEMORY_GROW_PER_BYTE: u64 = 1;
+
+    // Tier 5: Storage (expensive!)
+    pub const SLOAD: u64 = 100;          // Read from storage
+    pub const SSTORE_SET: u64 = 20000;   // Write to empty slot
+    pub const SSTORE_RESET: u64 = 5000;  // Overwrite existing slot
+
+    // Control flow
+    pub const JUMP: u64 = 8;
+    pub const CALL: u64 = 700;
+}
+
+/// Gas meter tracks remaining gas.
+pub struct GasMeter {
+    remaining: u64,
+    used: u64,
+}
+
+impl GasMeter {
+    pub fn new(limit: u64) -> Self {
+        Self { remaining: limit, used: 0 }
+    }
+
+    /// Consume gas, returning error if insufficient.
+    pub fn consume(&mut self, amount: u64) -> Result<(), VmError> {
+        if self.remaining < amount {
+            return Err(VmError::OutOfGas {
+                required: amount,
+                remaining: self.remaining,
+            });
+        }
+        self.remaining -= amount;
+        self.used += amount;
+        Ok(())
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.remaining
+    }
+
+    pub fn used(&self) -> u64 {
+        self.used
+    }
+}
+```
+
+### Why These Costs?
+
+| Operation | Cost | Rationale |
+|-----------|------|-----------|
+| ADD, SUB | 2 | Single CPU cycle equivalent |
+| MUL | 3 | Slightly more complex |
+| DIV | 5 | Division is slow on real CPUs |
+| SLOAD | 100 | Disk read (SSD ~100μs) |
+| SSTORE (new) | 20,000 | Permanent storage is expensive |
+
+<Aside type="note" title="Ethereum Comparison">
+Ethereum's gas costs are similar in spirit. SSTORE to a new slot costs 20,000 gas, while ADD costs 3. The ratio (~7000x) reflects the real cost difference between a CPU operation and a database write.
+</Aside>
+
+### Memory Expansion Costs
+
+Memory isn't free. When you access a higher address than before, you pay for the expansion:
+
+```rust
+impl GasMeter {
+    /// Calculate gas for memory expansion.
+    pub fn memory_expansion_cost(current_size: usize, new_size: usize) -> u64 {
+        if new_size <= current_size {
+            return 0;
+        }
+        let expansion = (new_size - current_size) as u64;
+        expansion * GasCosts::MEMORY_GROW_PER_BYTE
+    }
+}
+```
+
+---
+
+## 3.5 The Executor
+
+The executor is the heart of the VM — the **fetch-decode-execute** loop:
+
+```rust
+// crates/vm/src/executor.rs
+
+use crate::{
+    gas::{GasCosts, GasMeter},
+    memory::Memory,
+    opcodes::Opcode,
+};
+use minichain_core::Address;
+use thiserror::Error;
+
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum VmError {
+    #[error("Out of gas: required {required}, remaining {remaining}")]
+    OutOfGas { required: u64, remaining: u64 },
+
+    #[error("Invalid opcode: 0x{0:02X}")]
+    InvalidOpcode(u8),
+
+    #[error("Division by zero")]
+    DivisionByZero,
+
+    #[error("Memory overflow")]
+    MemoryOverflow,
+
+    #[error("Invalid jump destination: {0}")]
+    InvalidJump(usize),
+
+    #[error("Stack underflow")]
+    StackUnderflow,
+
+    #[error("Execution reverted")]
+    Reverted,
+}
+
+/// Execution result.
+pub struct ExecutionResult {
+    pub success: bool,
+    pub gas_used: u64,
+    pub return_data: Vec<u8>,
+    pub logs: Vec<u64>,  // LOG opcode outputs
+}
+
+/// The virtual machine state.
+pub struct Vm {
+    registers: [u64; 16],
+    memory: Memory,
+    pc: usize,
+    gas: GasMeter,
+    bytecode: Vec<u8>,
+    halted: bool,
+
+    // Context
+    caller: Address,
+    address: Address,
+    call_value: u64,
+    block_number: u64,
+    timestamp: u64,
+
+    // Outputs
+    logs: Vec<u64>,
+}
+```
+
+### The Execution Loop
+
+```rust
+impl Vm {
+    /// Create a new VM with the given bytecode and gas limit.
+    pub fn new(
+        bytecode: Vec<u8>,
+        gas_limit: u64,
+        caller: Address,
+        address: Address,
+        call_value: u64,
+    ) -> Self {
+        Self {
+            registers: [0; 16],
+            memory: Memory::new(1024 * 1024),  // 1MB max
+            pc: 0,
+            gas: GasMeter::new(gas_limit),
+            bytecode,
+            halted: false,
+            caller,
+            address,
+            call_value,
+            block_number: 0,
+            timestamp: 0,
+            logs: Vec::new(),
+        }
+    }
+
+    /// Run the VM until it halts or runs out of gas.
+    pub fn run(&mut self) -> Result<ExecutionResult, VmError> {
+        while !self.halted && self.pc < self.bytecode.len() {
+            self.step()?;
+        }
+
+        Ok(ExecutionResult {
+            success: self.halted,  // HALT = success, out of bounds = failure
+            gas_used: self.gas.used(),
+            return_data: Vec::new(),  // TODO: implement return data
+            logs: std::mem::take(&mut self.logs),
+        })
+    }
+
+    /// Execute a single instruction.
+    fn step(&mut self) -> Result<(), VmError> {
+        // Fetch
+        let opcode_byte = self.bytecode[self.pc];
+        let opcode = Opcode::from_byte(opcode_byte)
+            .ok_or(VmError::InvalidOpcode(opcode_byte))?;
+
+        // Decode & Execute
+        match opcode {
+            Opcode::HALT => {
+                self.gas.consume(GasCosts::ZERO)?;
+                self.halted = true;
+            }
+
+            Opcode::NOP => {
+                self.gas.consume(GasCosts::ZERO)?;
+                self.pc += 1;
+            }
+
+            Opcode::ADD => {
+                self.gas.consume(GasCosts::BASE)?;
+                let (dst, s1, s2) = self.decode_rrr();
+                let result = self.registers[s1].wrapping_add(self.registers[s2]);
+                self.registers[dst] = result;
+                self.pc += 3;
+            }
+
+            Opcode::SUB => {
+                self.gas.consume(GasCosts::BASE)?;
+                let (dst, s1, s2) = self.decode_rrr();
+                let result = self.registers[s1].wrapping_sub(self.registers[s2]);
+                self.registers[dst] = result;
+                self.pc += 3;
+            }
+
+            Opcode::MUL => {
+                self.gas.consume(GasCosts::LOW)?;
+                let (dst, s1, s2) = self.decode_rrr();
+                let result = self.registers[s1].wrapping_mul(self.registers[s2]);
+                self.registers[dst] = result;
+                self.pc += 3;
+            }
+
+            Opcode::DIV => {
+                self.gas.consume(GasCosts::MID)?;
+                let (dst, s1, s2) = self.decode_rrr();
+                let divisor = self.registers[s2];
+                if divisor == 0 {
+                    return Err(VmError::DivisionByZero);
+                }
+                self.registers[dst] = self.registers[s1] / divisor;
+                self.pc += 3;
+            }
+
+            Opcode::LOADI => {
+                self.gas.consume(GasCosts::BASE)?;
+                let dst = self.decode_r();
+                let immediate = self.decode_imm64();
+                self.registers[dst] = immediate;
+                self.pc += 10;
+            }
+
+            Opcode::MOV => {
+                self.gas.consume(GasCosts::BASE)?;
+                let (dst, src) = self.decode_rr();
+                self.registers[dst] = self.registers[src];
+                self.pc += 2;
+            }
+
+            Opcode::JUMP => {
+                self.gas.consume(GasCosts::JUMP)?;
+                let target = self.decode_r();
+                let addr = self.registers[target] as usize;
+                if addr >= self.bytecode.len() {
+                    return Err(VmError::InvalidJump(addr));
+                }
+                self.pc = addr;
+            }
+
+            Opcode::JUMPI => {
+                self.gas.consume(GasCosts::JUMP)?;
+                let (cond, target) = self.decode_rr();
+                if self.registers[cond] != 0 {
+                    let addr = self.registers[target] as usize;
+                    if addr >= self.bytecode.len() {
+                        return Err(VmError::InvalidJump(addr));
+                    }
+                    self.pc = addr;
+                } else {
+                    self.pc += 2;
+                }
+            }
+
+            Opcode::LOG => {
+                self.gas.consume(GasCosts::BASE)?;
+                let src = self.decode_r();
+                self.logs.push(self.registers[src]);
+                self.pc += 2;
+            }
+
+            // ... implement remaining opcodes similarly
+
+            _ => {
+                return Err(VmError::InvalidOpcode(opcode_byte));
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+### Decoding Helpers
+
+```rust
+impl Vm {
+    /// Decode a single register operand: [opcode, RRRR____]
+    fn decode_r(&self) -> usize {
+        ((self.bytecode[self.pc + 1] >> 4) & 0x0F) as usize
+    }
+
+    /// Decode two register operands: [opcode, RRRR_SSSS]
+    fn decode_rr(&self) -> (usize, usize) {
+        let byte = self.bytecode[self.pc + 1];
+        let r1 = ((byte >> 4) & 0x0F) as usize;
+        let r2 = (byte & 0x0F) as usize;
+        (r1, r2)
+    }
+
+    /// Decode three register operands: [opcode, DDDD_SSS1, SSS2____]
+    fn decode_rrr(&self) -> (usize, usize, usize) {
+        let b1 = self.bytecode[self.pc + 1];
+        let b2 = self.bytecode[self.pc + 2];
+        let dst = ((b1 >> 4) & 0x0F) as usize;
+        let s1 = (b1 & 0x0F) as usize;
+        let s2 = ((b2 >> 4) & 0x0F) as usize;
+        (dst, s1, s2)
+    }
+
+    /// Decode a 64-bit immediate value (little-endian).
+    fn decode_imm64(&self) -> u64 {
+        let start = self.pc + 2;
+        let bytes = &self.bytecode[start..start + 8];
+        u64::from_le_bytes(bytes.try_into().unwrap())
+    }
+}
+```
+
+---
+
+## 3.6 Storage Integration
+
+The VM connects to the storage layer from [Chapter 2](/part2/chapter2-storage) via callbacks:
+
+```rust
+/// Storage interface for the VM.
+pub trait StorageBackend {
+    /// Read 32 bytes from storage slot.
+    fn sload(&self, key: &[u8; 32]) -> [u8; 32];
+
+    /// Write 32 bytes to storage slot.
+    fn sstore(&mut self, key: &[u8; 32], value: &[u8; 32]);
+}
+
+impl Vm {
+    /// Execute SLOAD: read from persistent storage.
+    fn execute_sload<S: StorageBackend>(
+        &mut self,
+        storage: &S,
+    ) -> Result<(), VmError> {
+        self.gas.consume(GasCosts::SLOAD)?;
+
+        let (dst, key_reg) = self.decode_rr();
+
+        // Convert register value to 32-byte key
+        let key_value = self.registers[key_reg];
+        let mut key = [0u8; 32];
+        key[24..32].copy_from_slice(&key_value.to_be_bytes());
+
+        // Load from storage
+        let value = storage.sload(&key);
+
+        // Store first 8 bytes in register (simplified)
+        self.registers[dst] = u64::from_be_bytes(value[24..32].try_into().unwrap());
+
+        self.pc += 2;
+        Ok(())
+    }
+
+    /// Execute SSTORE: write to persistent storage.
+    fn execute_sstore<S: StorageBackend>(
+        &mut self,
+        storage: &mut S,
+    ) -> Result<(), VmError> {
+        // Check if slot was empty for gas calculation
+        let (key_reg, value_reg) = self.decode_rr();
+
+        let key_value = self.registers[key_reg];
+        let mut key = [0u8; 32];
+        key[24..32].copy_from_slice(&key_value.to_be_bytes());
+
+        let current = storage.sload(&key);
+        let is_empty = current == [0u8; 32];
+
+        // Different costs for new vs existing slot
+        let cost = if is_empty {
+            GasCosts::SSTORE_SET
+        } else {
+            GasCosts::SSTORE_RESET
+        };
+        self.gas.consume(cost)?;
+
+        // Write to storage
+        let mut value = [0u8; 32];
+        value[24..32].copy_from_slice(&self.registers[value_reg].to_be_bytes());
+        storage.sstore(&key, &value);
+
+        self.pc += 2;
+        Ok(())
+    }
+}
+```
+
+<Aside type="tip" title="Why 32-Byte Slots?">
+Storage slots are 32 bytes (256 bits) to match Ethereum's design. This allows storing:
+- A full 256-bit integer
+- A hash (32 bytes)
+- An address + extra data (20 + 12 bytes)
+
+Our registers are only 64-bit, so we use the lower 8 bytes of the 32-byte slot.
+</Aside>
+
+---
+
+## 3.7 Execution Tracing
+
+For debugging, we can record every instruction executed:
+
+```rust
+// crates/vm/src/tracer.rs
+
+use crate::opcodes::Opcode;
+
+/// A single trace entry.
+#[derive(Debug, Clone)]
+pub struct TraceStep {
+    pub pc: usize,
+    pub opcode: Opcode,
+    pub gas_before: u64,
+    pub gas_after: u64,
+    pub registers: [u64; 16],
+}
+
+/// Records execution for debugging.
+pub struct Tracer {
+    steps: Vec<TraceStep>,
+    enabled: bool,
+}
+
+impl Tracer {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            steps: Vec::new(),
+            enabled,
+        }
+    }
+
+    pub fn record(&mut self, step: TraceStep) {
+        if self.enabled {
+            self.steps.push(step);
+        }
+    }
+
+    pub fn steps(&self) -> &[TraceStep] {
+        &self.steps
+    }
+
+    /// Print a human-readable trace.
+    pub fn print_trace(&self) {
+        for (i, step) in self.steps.iter().enumerate() {
+            println!(
+                "{:4}: PC={:04X} {:?} gas={} R0={} R1={} R2={}",
+                i,
+                step.pc,
+                step.opcode,
+                step.gas_after,
+                step.registers[0],
+                step.registers[1],
+                step.registers[2],
+            );
+        }
+    }
+}
+```
+
+### Example Trace Output
+
+```
+   0: PC=0000 LOADI gas=999998 R0=10 R1=0 R2=0
+   1: PC=000A LOADI gas=999996 R0=10 R1=20 R2=0
+   2: PC=0014 ADD   gas=999994 R0=10 R1=20 R2=30
+   3: PC=0017 LOG   gas=999992 R0=10 R1=20 R2=30
+   4: PC=0019 HALT  gas=999992 R0=10 R1=20 R2=30
+```
+
+---
+
+## 3.8 Complete Example
+
+Let's trace through a simple program:
+
+```asm
+; Calculate 10 + 20 and log the result
+
+LOADI R0, 10      ; R0 = 10
+LOADI R1, 20      ; R1 = 20
+ADD R2, R0, R1    ; R2 = R0 + R1 = 30
+LOG R2            ; output 30
+HALT              ; stop
+```
+
+**Bytecode encoding:**
+
+```
+70 00 0A 00 00 00 00 00 00 00   ; LOADI R0, 10
+70 10 14 00 00 00 00 00 00 00   ; LOADI R1, 20
+10 20 10                        ; ADD R2, R0, R1
+F0 20                           ; LOG R2
+00                              ; HALT
+```
+
+**Execution:**
+
+| Step | PC | Instruction | R0 | R1 | R2 | Gas Used |
+|------|-----|-------------|-----|-----|-----|----------|
+| 0 | 0x00 | LOADI R0, 10 | 10 | 0 | 0 | 2 |
+| 1 | 0x0A | LOADI R1, 20 | 10 | 20 | 0 | 4 |
+| 2 | 0x14 | ADD R2, R0, R1 | 10 | 20 | 30 | 6 |
+| 3 | 0x17 | LOG R2 | 10 | 20 | 30 | 8 |
+| 4 | 0x19 | HALT | 10 | 20 | 30 | 8 |
+
+**Result:** Success, gas used = 8, logs = [30]
+
+---
+
+## Summary
+
+We've built a register-based virtual machine:
+
+| Component | What It Does |
+|-----------|--------------|
+| `Registers` | 16 × 64-bit general-purpose registers |
+| `Memory` | Growable linear memory buffer |
+| `Opcode` | 60+ instructions (arithmetic, logic, memory, storage) |
+| `GasMeter` | Tracks and limits computation |
+| `Vm` | The fetch-decode-execute loop |
+| `Tracer` | Records execution for debugging |
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Register-based | More intuitive than stack-based |
+| 16 registers | Addressable with 4 bits, enough for most code |
+| 64-bit values | Matches modern CPUs, simpler than 256-bit |
+| Gas metering | Prevents infinite loops, enables economic accountability |
+| 32-byte storage slots | Compatible with Ethereum, fits hashes |
+
+---
+
+## What's Next?
+
+We have a VM, but writing bytecode by hand is tedious. In [Chapter 4](/part4/chapter4-assembler), we'll build an **assembler** that compiles human-readable assembly into bytecode:
+
+```asm
+; This is much nicer than raw bytes!
+.entry main
+
+main:
+    LOADI R0, 0       ; storage slot 0
+    SLOAD R1, R0      ; load current counter
+    ADDI R1, R1, 1    ; increment
+    SSTORE R0, R1     ; store back
+    HALT
+```
+
+The assembler will handle labels, `.entry` directives, and emit the compact bytecode our VM expects.

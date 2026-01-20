@@ -1,49 +1,66 @@
-# Starlight Starter Kit: Basics
+# Minichain Documentation
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+Documentation for "Building a Blockchain from Scratch" - a hands-on guide to building a minimal blockchain with Rust.
 
-```
-bun create astro@latest -- --template starlight
-```
+Built with [Astro Starlight](https://starlight.astro.build).
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
-
-## 🚀 Project Structure
-
-Inside of your Astro + Starlight project, you'll see the following folders and files:
+## Project Structure
 
 ```
-.
-├── public/
+docs/
+├── public/              # Static assets (favicon, images)
 ├── src/
-│   ├── assets/
+│   ├── assets/          # Images embedded in markdown
 │   ├── content/
-│   │   └── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
+│   │   └── docs/        # Documentation pages (.md/.mdx)
+│   └── styles/          # Custom CSS
+├── astro.config.mjs     # Astro configuration
+├── Dockerfile           # Docker setup for serving
+└── package.json
 ```
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+## Development
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+### Prerequisites
 
-Static assets, like favicons, can be placed in the `public/` directory.
+- [Bun](https://bun.sh/) (recommended) or Node.js 18+
 
-## 🧞 Commands
+### Commands
 
-All commands are run from the root of the project, from a terminal:
+| Command        | Action                                      |
+| :------------- | :------------------------------------------ |
+| `bun install`  | Install dependencies                        |
+| `bun dev`      | Start local dev server at `localhost:4321`  |
+| `bun build`    | Build production site to `./dist/`          |
+| `bun preview`  | Preview build locally before deploying      |
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `bun install`             | Installs dependencies                            |
-| `bun dev`             | Starts local dev server at `localhost:4321`      |
-| `bun build`           | Build your production site to `./dist/`          |
-| `bun preview`         | Preview your build locally, before deploying     |
-| `bun astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `bun astro -- --help` | Get help using the Astro CLI                     |
+## Docker
 
-## 👀 Want to learn more?
+Build and run the documentation using Docker:
 
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+```bash
+# Build the image
+docker build -t minichain-docs .
+
+# Run the container
+docker run -p 8080:80 minichain-docs
+```
+
+The documentation will be available at `http://localhost:8080`.
+
+## Content
+
+The book covers:
+
+- **Part 1: Foundation** - Core primitives (hashing, cryptography, accounts, transactions, blocks)
+- **Part 2: Storage** - Persistent state with RocksDB
+- **Part 3: Virtual Machine** - Register-based VM with gas metering
+- **Part 4: Assembler** - Assembly language to bytecode compiler
+- **Part 5: Blockchain** - Consensus and chain management
+- **Part 6: CLI** - Command line interface and REPL
+
+## Adding Content
+
+1. Create `.md` or `.mdx` files in `src/content/docs/`
+2. Each file becomes a route based on its path
+3. Update `astro.config.mjs` sidebar configuration if needed

@@ -12,3 +12,6 @@ sled.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 bincode.workspace = true
+
+[dev-dependencies]
+tempfile = "3.10"

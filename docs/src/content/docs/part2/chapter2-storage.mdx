@@ -1,0 +1,1068 @@
+---
+title: "Chapter 2: Persistent State"
+description: Building the storage layer with sled
+---
+
+import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+
+In [Chapter 1](/part1/chapter1-core), we built all our blockchain primitives in memory. But a blockchain that forgets everything when you restart it isn't very useful. In this chapter, we'll build the **storage layer** — the persistent backbone that remembers accounts, blocks, and contract state.
+
+## What We're Building
+
+By the end of this chapter, you'll have implemented:
+
+| Module | Purpose |
+|--------|---------|
+| `db.rs` | sled database wrapper with serialization |
+| `state.rs` | World state (accounts, balances, nonces) |
+| `chain.rs` | Block storage and chain head tracking |
+
+---
+
+## The Banking Analogy
+
+Think of the storage layer as a bank's **ledger system**:
+
+| Blockchain Storage | Bank Equivalent |
+|-------------------|-----------------|
+| **World State** | The master ledger of all accounts |
+| **Account Record** | Individual account file (balance, transaction count) |
+| **Block Storage** | Daily transaction batch records |
+| **Contract Storage** | Safe deposit boxes (contract-specific data) |
+| **State Root** | Daily audit checksum ("everything balances") |
+
+A bank doesn't keep all records in the teller's head — they're written to a database. If the bank's systems restart, all account balances are still there. That's what we're building.
+
+---
+
+## 2.1 Why sled?
+
+Before we write code, let's understand our database choice.
+
+### Embedded vs Client-Server Databases
+
+| Type | Examples | How It Works |
+|------|----------|--------------|
+| **Embedded** | sled, RocksDB, SQLite | Library linked into your app; no separate process |
+| **Client-Server** | PostgreSQL, MySQL, MongoDB | Separate daemon; your app connects over network |
+
+For a blockchain node, **embedded is better**:
+- Single process = simpler deployment
+- No network overhead between app and database
+- Database lives and dies with the node
+
+### Key-Value vs Relational
+
+| Type | Data Model | Query Style | Best For |
+|------|------------|-------------|----------|
+| **Key-Value** | `key → bytes` | Point lookups | Simple, fast access patterns |
+| **Relational** | Tables, rows, columns | SQL queries | Complex relationships, joins |
+
+Blockchain state is inherently key-value:
+- `address → account`
+- `block_hash → block`
+- `(contract, slot) → value`
+
+We don't need JOINs or complex queries — just fast lookups and writes.
+
+### sled vs Alternatives
+
+| Database | Language | Pros | Cons |
+|----------|----------|------|------|
+| **sled** | Pure Rust | Zero dependencies, great Rust API | Younger than alternatives |
+| RocksDB | C++ | Battle-tested (used by Ethereum) | C++ bindings, complex tuning |
+| LevelDB | C++ | Simple, proven | Older, fewer features |
+| SQLite | C | SQL flexibility | Overkill for key-value |
+
+<Aside type="tip">
+sled is designed for Rust from the ground up. Its API feels natural, errors are typed, and you get Rust's memory safety guarantees all the way down.
+</Aside>
+
+### When Would You Choose Differently?
+
+| Scenario | Better Choice |
+|----------|---------------|
+| Production Ethereum client | RocksDB (proven at scale) |
+| Learning project | sled (simpler, pure Rust) |
+| Need SQL queries | SQLite |
+| Distributed database | Don't — each node has its own storage |
+
+For minichain, sled is perfect: it's simple, fast, and lets us focus on blockchain concepts rather than database operations.
+
+---
+
+## 2.2 Database Wrapper
+
+Let's build a thin wrapper around sled that handles serialization and provides a clean API.
+
+### Opening the Database
+
+```rust
+// crates/storage/src/db.rs
+
+use sled::Db;
+use std::path::Path;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum StorageError {
+    #[error("Database error: {0}")]
+    Database(#[from] sled::Error),
+
+    #[error("Serialization error")]
+    Serialization,
+
+    #[error("Key not found: {0}")]
+    NotFound(String),
+}
+
+pub type Result<T> = std::result::Result<T, StorageError>;
+
+/// Wrapper around sled database with serialization helpers.
+pub struct Storage {
+    db: Db,
+}
+
+impl Storage {
+    /// Open a database at the given path.
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let db = sled::open(path)?;
+        Ok(Self { db })
+    }
+
+    /// Open an in-memory database (for testing).
+    pub fn open_temporary() -> Result<Self> {
+        let db = sled::Config::new().temporary(true).open()?;
+        Ok(Self { db })
+    }
+}
+```
+
+<Aside type="note">
+The `open_temporary()` method is invaluable for testing. Each test gets a fresh, isolated database that's automatically cleaned up.
+</Aside>
+
+### Basic Operations
+
+```rust
+use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::ser::serializers::AllocSerializer;
+use rkyv::de::deserializers::SharedDeserializeMap;
+
+impl Storage {
+    /// Store a serializable value.
+    pub fn put<V>(&self, key: impl AsRef<[u8]>, value: &V) -> Result<()>
+    where
+        V: Archive + Serialize<AllocSerializer<256>>,
+    {
+        let bytes = rkyv::to_bytes::<_, 256>(value)
+            .map_err(|_| StorageError::Serialization)?;
+        self.db.insert(key, bytes.as_slice())?;
+        Ok(())
+    }
+
+    /// Retrieve and deserialize a value.
+    pub fn get<V>(&self, key: impl AsRef<[u8]>) -> Result<Option<V>>
+    where
+        V: Archive,
+        V::Archived: Deserialize<V, SharedDeserializeMap>,
+    {
+        match self.db.get(key)? {
+            Some(bytes) => {
+                let value = rkyv::from_bytes::<V>(&bytes)
+                    .map_err(|_| StorageError::Serialization)?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Retrieve a value, returning error if not found.
+    pub fn get_or_err<V>(&self, key: impl AsRef<[u8]> + std::fmt::Debug + Clone) -> Result<V>
+    where
+        V: Archive,
+        V::Archived: Deserialize<V, SharedDeserializeMap>,
+    {
+        self.get(key.clone())?
+            .ok_or_else(|| StorageError::NotFound(format!("{:?}", key)))
+    }
+
+    /// Delete a key.
+    pub fn delete(&self, key: impl AsRef<[u8]>) -> Result<()> {
+        self.db.remove(key)?;
+        Ok(())
+    }
+
+    /// Check if a key exists.
+    pub fn contains(&self, key: impl AsRef<[u8]>) -> Result<bool> {
+        Ok(self.db.contains_key(key)?)
+    }
+}
+```
+
+### Why Do We Need Serialization?
+
+A key-value database stores **bytes**, not Rust structs. We can't just write:
+
+```rust
+db.insert("alice", account);  // Won't work — account is a struct, not bytes
+```
+
+**Serialization** converts structured data (structs, enums, vectors) into a flat byte sequence that can be stored or transmitted. **Deserialization** reverses the process.
+
+```
+Account { balance: 1000, nonce: 5 }
+        ↓ serialize
+[0x00, 0x00, 0x03, 0xE8, 0x00, 0x00, 0x00, 0x05, ...]
+        ↓ store in database
+db.insert("alice", bytes)
+        ↓ retrieve later
+db.get("alice") → bytes
+        ↓ deserialize
+Account { balance: 1000, nonce: 5 }
+```
+
+<Aside type="tip" title="Bank Analogy">
+Serialization is like filling out a standardized bank form. Your account details (name, balance, account type) get written into specific fields on paper. Anyone with the same form template can read it back. The "format" (JSON, rkyv, etc.) is the form template — different banks might use different forms, but they all capture the same information.
+</Aside>
+
+### Choosing a Serialization Format
+
+| Format | Human Readable | Size | Speed | Zero-Copy | Self-Describing |
+|--------|---------------|------|-------|-----------|-----------------|
+| JSON | Yes | Large | Slow | No | Yes |
+| bincode | No | Compact | Fast | No | No |
+| MessagePack | No | Compact | Fast | No | Yes |
+| **rkyv** | No | Compact | **Fastest** | **Yes** | No |
+| Protobuf | No | Compact | Fast | No | No (needs schema) |
+
+**Self-describing** means the encoded data includes field names/types, so you can decode it without knowing the original struct definition.
+
+**Zero-copy** means you can access data directly from the serialized bytes without allocating new memory or copying data.
+
+### Why rkyv?
+
+For storage, we don't need human readability — we need speed and compactness. rkyv (pronounced "archive") is the fastest serialization framework for Rust:
+
+- **Zero-copy deserialization** — access data directly from stored bytes without copying
+- **Pure Rust** — no external dependencies or code generation
+- **Compact** — no field names, no type tags, just raw data
+- **Blazingly fast** — benchmarks show 2-10x faster than alternatives
+
+<Aside type="note" title="How Zero-Copy Works">
+Traditional serialization (like JSON or bincode) works like this:
+```
+bytes → parse → allocate new struct → copy data into struct
+```
+
+rkyv works differently:
+```
+bytes → validate layout → return reference to data in-place
+```
+
+The serialized format is designed so that the bytes **are** the struct — no parsing or copying needed. This is why rkyv benchmarks so well for read-heavy workloads like blockchain state.
+</Aside>
+
+#### Deriving rkyv Traits
+
+To use rkyv, your structs need to derive the rkyv traits:
+
+```rust
+use rkyv::{Archive, Deserialize, Serialize};
+
+#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+#[archive(check_bytes)]  // Enable validation for untrusted data
+pub struct Account {
+    pub nonce: u64,
+    pub balance: u64,
+    pub code_hash: Option<Hash>,
+    pub storage_root: Hash,
+}
+```
+
+<Aside type="caution">
+rkyv is not self-describing. If you change a struct's fields, old data becomes unreadable. For production, you'd need versioning or migration strategies.
+</Aside>
+
+### Namespaced Keys
+
+Different types of data need different key prefixes to avoid collisions:
+
+```rust
+impl Storage {
+    /// Create a prefixed key for accounts.
+    pub fn account_key(address: &Address) -> Vec<u8> {
+        let mut key = b"account:".to_vec();
+        key.extend_from_slice(&address.0);
+        key
+    }
+
+    /// Create a prefixed key for blocks by height.
+    pub fn block_height_key(height: u64) -> Vec<u8> {
+        format!("block:height:{}", height).into_bytes()
+    }
+
+    /// Create a prefixed key for blocks by hash.
+    pub fn block_hash_key(hash: &Hash) -> Vec<u8> {
+        let mut key = b"block:hash:".to_vec();
+        key.extend_from_slice(&hash.0);
+        key
+    }
+
+    /// Create a prefixed key for contract storage.
+    pub fn contract_storage_key(contract: &Address, slot: &[u8]) -> Vec<u8> {
+        let mut key = b"storage:".to_vec();
+        key.extend_from_slice(&contract.0);
+        key.push(b':');
+        key.extend_from_slice(slot);
+        key
+    }
+}
+```
+
+<Aside type="tip" title="Key Design Pattern">
+The prefix pattern (`account:`, `block:hash:`, etc.) is common in key-value stores. It:
+- Prevents collisions between different data types
+- Enables prefix scanning (iterate all accounts, all blocks, etc.)
+- Makes debugging easier when inspecting raw data
+</Aside>
+
+---
+
+## 2.3 World State
+
+The **world state** is the complete snapshot of all accounts at a given point in time. It's the blockchain's source of truth.
+
+### The State Manager
+
+```rust
+// crates/storage/src/state.rs
+
+use minichain_core::{Account, Address, Hash, hash};
+use crate::db::{Storage, Result, StorageError};
+
+/// Manages the world state (all accounts).
+pub struct StateManager<'a> {
+    storage: &'a Storage,
+}
+
+impl<'a> StateManager<'a> {
+    pub fn new(storage: &'a Storage) -> Self {
+        Self { storage }
+    }
+}
+```
+
+### Account Operations
+
+<Tabs>
+  <TabItem label="Create & Update">
+```rust
+impl<'a> StateManager<'a> {
+    /// Create or update an account.
+    pub fn put_account(&self, address: &Address, account: &Account) -> Result<()> {
+        let key = Storage::account_key(address);
+        self.storage.put(key, account)
+    }
+
+    /// Get an account, returning default (empty) if not found.
+    pub fn get_account(&self, address: &Address) -> Result<Account> {
+        let key = Storage::account_key(address);
+        Ok(self.storage.get::<_, Account>(key)?.unwrap_or_default())
+    }
+
+    /// Check if an account exists.
+    pub fn account_exists(&self, address: &Address) -> Result<bool> {
+        let key = Storage::account_key(address);
+        self.storage.contains(key)
+    }
+}
+```
+  </TabItem>
+  <TabItem label="Balance & Nonce">
+```rust
+impl<'a> StateManager<'a> {
+    /// Get account balance.
+    pub fn get_balance(&self, address: &Address) -> Result<u64> {
+        Ok(self.get_account(address)?.balance)
+    }
+
+    /// Update account balance.
+    pub fn set_balance(&self, address: &Address, balance: u64) -> Result<()> {
+        let mut account = self.get_account(address)?;
+        account.balance = balance;
+        self.put_account(address, &account)
+    }
+
+    /// Add to account balance.
+    pub fn add_balance(&self, address: &Address, amount: u64) -> Result<()> {
+        let mut account = self.get_account(address)?;
+        account.balance = account.balance.saturating_add(amount);
+        self.put_account(address, &account)
+    }
+
+    /// Subtract from account balance (fails if insufficient).
+    pub fn sub_balance(&self, address: &Address, amount: u64) -> Result<()> {
+        let mut account = self.get_account(address)?;
+        if account.balance < amount {
+            return Err(StorageError::InsufficientBalance {
+                address: *address,
+                required: amount,
+                available: account.balance,
+            });
+        }
+        account.balance -= amount;
+        self.put_account(address, &account)
+    }
+
+    /// Get and increment nonce (for transaction ordering).
+    pub fn increment_nonce(&self, address: &Address) -> Result<u64> {
+        let mut account = self.get_account(address)?;
+        let nonce = account.nonce;
+        account.nonce = account.nonce.saturating_add(1);
+        self.put_account(address, &account)?;
+        Ok(nonce)
+    }
+}
+```
+  </TabItem>
+</Tabs>
+
+### Why `get_account` Returns Default?
+
+In blockchain, every address *implicitly* exists with zero balance and zero nonce. You can send coins to any address — it doesn't need to be "created" first.
+
+```rust
+// This is fine — Bob doesn't need to exist yet
+transfer(alice, bob, 100);
+
+// After transfer, Bob's account is created automatically
+assert_eq!(get_balance(bob), 100);
+```
+
+<Aside type="tip" title="Bank Analogy">
+It's like wire transfers: you can send money to any account number. If the account doesn't exist, the bank creates it when the money arrives. The blockchain works the same way.
+</Aside>
+
+### Contract Code Storage
+
+Contracts have associated bytecode. We store it separately (not in the Account struct) to avoid loading large bytecode for simple balance checks:
+
+```rust
+impl<'a> StateManager<'a> {
+    /// Store contract bytecode.
+    pub fn put_code(&self, code_hash: &Hash, code: &[u8]) -> Result<()> {
+        let key = format!("code:{}", code_hash.to_hex());
+        self.storage.put(key, &code.to_vec())
+    }
+
+    /// Retrieve contract bytecode.
+    pub fn get_code(&self, code_hash: &Hash) -> Result<Option<Vec<u8>>> {
+        let key = format!("code:{}", code_hash.to_hex());
+        self.storage.get(key)
+    }
+
+    /// Deploy a contract: store code and create account.
+    pub fn deploy_contract(
+        &self,
+        address: &Address,
+        code: &[u8],
+        initial_balance: u64,
+    ) -> Result<Hash> {
+        // Hash the code
+        let code_hash = hash(code);
+
+        // Store the bytecode
+        self.put_code(&code_hash, code)?;
+
+        // Create the contract account
+        let account = Account::new_contract(code_hash);
+        let mut account = account;
+        account.balance = initial_balance;
+        self.put_account(address, &account)?;
+
+        Ok(code_hash)
+    }
+}
+```
+
+<Aside type="note" title="Why Store Code Separately?">
+A contract's code might be 10KB or more. If we embedded it in the Account struct:
+- Every balance check would load 10KB
+- Same code deployed twice would be stored twice
+
+By storing code by hash, identical contracts share storage, and account lookups stay fast.
+</Aside>
+
+---
+
+## 2.4 Block Storage
+
+Blocks need to be retrievable by both **height** (block number) and **hash** (unique identifier).
+
+### The Chain Store
+
+```rust
+// crates/storage/src/chain.rs
+
+use minichain_core::{Block, Hash};
+use crate::db::{Storage, Result};
+
+/// Manages block storage and chain state.
+pub struct ChainStore<'a> {
+    storage: &'a Storage,
+}
+
+impl<'a> ChainStore<'a> {
+    pub fn new(storage: &'a Storage) -> Self {
+        Self { storage }
+    }
+}
+```
+
+### Storing Blocks
+
+When we store a block, we create **two index entries**. Why two?
+
+Different use cases need different lookup keys:
+
+| Use Case | Lookup By | Example |
+|----------|-----------|---------|
+| Verify a transaction proof | **Hash** | "Show me block `0xABC123...`" |
+| Display block explorer | **Height** | "Show me block #1000" |
+| Sync from a peer | **Hash** | "Send me block `0xDEF456...`" |
+| Get the latest N blocks | **Height** | "Show me blocks #995 to #1000" |
+
+<Aside type="tip" title="Database Analogy">
+Think of it like a library catalog system:
+- **Primary storage** (by hash): The actual books on shelves, organized by ISBN
+- **Secondary index** (by height): A catalog card that says "Book #47 → ISBN 978-3-16-148410-0"
+
+You can't change a book's ISBN, but you might reorganize which book is "number 47" (during chain reorganizations). The secondary index is just a pointer — it's cheap to update.
+</Aside>
+
+**Why hash as primary, height as secondary?**
+
+- **Hash is immutable** — a block's hash never changes. It's the block's true identity.
+- **Height can change** — during a chain reorganization (reorg), block #100 might be replaced by a different block. The old block still exists (same hash), but it's no longer at height 100.
+
+By storing the actual block data by hash, we never lose blocks during reorgs. We just update the height→hash pointer.
+
+**What do the keys look like?**
+
+The `block_hash_key` and `block_height_key` functions (defined in [section 2.2](#namespaced-keys)) create namespaced database keys:
+
+```
+Block hash:   0xABCD1234...
+              ↓ block_hash_key()
+DB key:       "block:hash:0xABCD1234..."  →  stores: [full block data]
+
+Block height: 42
+              ↓ block_height_key()
+DB key:       "block:height:42"           →  stores: 0xABCD1234... (just the hash)
+```
+
+The prefix (`block:hash:`, `block:height:`) prevents collisions with other data types (accounts, contract storage, etc.) in the same database.
+
+```rust
+impl<'a> ChainStore<'a> {
+    /// Store a block with both height and hash indexes.
+    pub fn put_block(&self, block: &Block) -> Result<()> {
+        let hash = block.hash();  // e.g., 0xABCD1234...
+
+        // Primary: "block:hash:0xABCD1234..." → [block data]
+        let hash_key = Storage::block_hash_key(&hash);
+        self.storage.put(&hash_key, block)?;
+
+        // Secondary: "block:height:42" → 0xABCD1234...
+        let height_key = Storage::block_height_key(block.header.height);
+        self.storage.put(&height_key, &hash)?;
+
+        Ok(())
+    }
+}
+```
+
+<Aside type="note" title="Storage Efficiency">
+Notice we only store the block data **once** (by hash). The height index just stores a 32-byte hash pointer, not a copy of the entire block. This saves significant storage space.
+</Aside>
+
+### Retrieving Blocks
+
+<Tabs>
+  <TabItem label="By Hash">
+```rust
+impl<'a> ChainStore<'a> {
+    /// Get a block by its hash.
+    pub fn get_block_by_hash(&self, hash: &Hash) -> Result<Option<Block>> {
+        let key = Storage::block_hash_key(hash);
+        self.storage.get(key)
+    }
+}
+```
+  </TabItem>
+  <TabItem label="By Height">
+```rust
+impl<'a> ChainStore<'a> {
+    /// Get a block by its height.
+    pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>> {
+        // First, get the hash at this height
+        let height_key = Storage::block_height_key(height);
+        let hash: Option<Hash> = self.storage.get(&height_key)?;
+
+        // Then fetch the block by hash
+        match hash {
+            Some(h) => self.get_block_by_hash(&h),
+            None => Ok(None),
+        }
+    }
+}
+```
+  </TabItem>
+</Tabs>
+
+### Chain Head Tracking
+
+The **chain head** is the latest block. We need to track it for:
+- Adding new blocks
+- Answering "what's the current state?"
+- Syncing with other nodes
+
+```rust
+const CHAIN_HEAD_KEY: &[u8] = b"chain:head";
+const CHAIN_HEIGHT_KEY: &[u8] = b"chain:height";
+
+impl<'a> ChainStore<'a> {
+    /// Get the current chain head hash.
+    pub fn get_head(&self) -> Result<Option<Hash>> {
+        self.storage.get(CHAIN_HEAD_KEY)
+    }
+
+    /// Get the current chain height.
+    pub fn get_height(&self) -> Result<u64> {
+        Ok(self.storage.get::<_, u64>(CHAIN_HEIGHT_KEY)?.unwrap_or(0))
+    }
+
+    /// Update the chain head (called after adding a new block).
+    pub fn set_head(&self, hash: &Hash, height: u64) -> Result<()> {
+        self.storage.put(CHAIN_HEAD_KEY, hash)?;
+        self.storage.put(CHAIN_HEIGHT_KEY, &height)?;
+        Ok(())
+    }
+
+    /// Get the latest block.
+    pub fn get_latest_block(&self) -> Result<Option<Block>> {
+        match self.get_head()? {
+            Some(hash) => self.get_block_by_hash(&hash),
+            None => Ok(None),
+        }
+    }
+}
+```
+
+### Genesis Block
+
+The genesis block is special — it bootstraps the chain:
+
+```rust
+impl<'a> ChainStore<'a> {
+    /// Initialize the chain with a genesis block.
+    pub fn init_genesis(&self, genesis: &Block) -> Result<()> {
+        // Verify it's actually a genesis block
+        if genesis.header.height != 0 {
+            return Err(StorageError::InvalidGenesis(
+                "Genesis block must have height 0".into()
+            ));
+        }
+
+        // Check if we already have a genesis
+        if self.get_height()? > 0 {
+            return Err(StorageError::InvalidGenesis(
+                "Chain already initialized".into()
+            ));
+        }
+
+        // Store the genesis block
+        self.put_block(genesis)?;
+
+        // Set it as the head
+        self.set_head(&genesis.hash(), 0)?;
+
+        Ok(())
+    }
+
+    /// Check if the chain is initialized.
+    pub fn is_initialized(&self) -> Result<bool> {
+        Ok(self.get_head()?.is_some())
+    }
+}
+```
+
+<Aside type="tip" title="Why Check for Existing Genesis?">
+Running `init_genesis` twice would create inconsistent state. The check ensures idempotency — you can safely call it on startup without worrying if the database already exists.
+</Aside>
+
+---
+
+## 2.5 Contract Storage
+
+Smart contracts need their own persistent key-value storage. Each contract has an isolated namespace.
+
+### Process Memory Analogy
+
+If you're familiar with how operating systems manage process memory, here's how contract storage compares:
+
+| Process Memory | Contract Storage | Similarity |
+|----------------|------------------|------------|
+| **Stack** | *Not similar* | Stack is temporary (function-scoped, LIFO). Contract storage persists forever. |
+| **Heap** | *Partially similar* | Both are random-access. But heap dies when process exits; contract storage survives. |
+| **Memory-mapped files** | *More similar* | Persistent, survives restarts, random-access. |
+| **Virtual address space** | **Most similar** | Each process thinks it owns address `0x1000`. Each contract thinks it owns slot `0`. Isolated namespaces. |
+
+<Aside type="note" title="The Key Insight">
+Contract storage is like **virtual memory isolation** — each contract has its own address space starting at slot 0. Just as two processes can both write to virtual address `0x1000` without conflict (the OS maps them to different physical addresses), two contracts can both write to storage slot `0` without conflict (we prefix keys with the contract address).
+
+The difference: process memory is volatile (lost on restart), while contract storage is persistent (stored on disk, survives forever).
+</Aside>
+
+### Why Isolated Storage?
+
+```
+Contract A: storage[0] = 100
+Contract B: storage[0] = 200
+
+These are different! Each contract has its own "slot 0".
+```
+
+Under the hood, we achieve isolation by **prefixing the key with the contract address**:
+
+```
+Contract A (0xAAAA...): storage[0] = 100
+  → DB key: "storage:0xAAAA...:0"  → 100
+
+Contract B (0xBBBB...): storage[0] = 200
+  → DB key: "storage:0xBBBB...:0"  → 200
+```
+
+Same slot number, different database keys. No collision.
+
+<Aside type="tip" title="Bank Analogy">
+Think of contract storage like safe deposit boxes. Each customer (contract) has their own numbered boxes. Box #1 for Customer A is completely separate from Box #1 for Customer B.
+</Aside>
+
+### Storage Operations
+
+```rust
+impl<'a> StateManager<'a> {
+    /// Read from contract storage.
+    pub fn storage_get(
+        &self,
+        contract: &Address,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        let db_key = Storage::contract_storage_key(contract, key);
+        self.storage.get(db_key)
+    }
+
+    /// Write to contract storage.
+    pub fn storage_put(
+        &self,
+        contract: &Address,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<()> {
+        let db_key = Storage::contract_storage_key(contract, key);
+        self.storage.put(db_key, &value.to_vec())
+    }
+
+    /// Delete from contract storage.
+    pub fn storage_delete(
+        &self,
+        contract: &Address,
+        key: &[u8],
+    ) -> Result<()> {
+        let db_key = Storage::contract_storage_key(contract, key);
+        self.storage.delete(db_key)
+    }
+}
+```
+
+### Storage Slots
+
+In Ethereum and our VM, storage keys are typically 32-byte **slots**:
+
+```rust
+/// Storage slot (32 bytes, like Ethereum).
+pub type StorageSlot = [u8; 32];
+
+impl<'a> StateManager<'a> {
+    /// Read a 32-byte slot from contract storage.
+    pub fn sload(&self, contract: &Address, slot: &StorageSlot) -> Result<[u8; 32]> {
+        match self.storage_get(contract, slot)? {
+            Some(bytes) if bytes.len() == 32 => {
+                let mut result = [0u8; 32];
+                result.copy_from_slice(&bytes);
+                Ok(result)
+            }
+            Some(_) => Err(StorageError::InvalidStorageValue),
+            None => Ok([0u8; 32]),  // Uninitialized slots are zero
+        }
+    }
+
+    /// Write a 32-byte value to contract storage.
+    pub fn sstore(
+        &self,
+        contract: &Address,
+        slot: &StorageSlot,
+        value: &[u8; 32],
+    ) -> Result<()> {
+        self.storage_put(contract, slot, value)
+    }
+}
+```
+
+<Aside type="note">
+SLOAD and SSTORE are the VM opcodes for storage access. We'll use these names in [Chapter 3](/part3/chapter3-vm) when implementing the virtual machine.
+</Aside>
+
+---
+
+## 2.6 State Root Computation
+
+The **state root** is a single hash that commits to the entire world state. It goes in the block header.
+
+### Why State Roots Matter (Recap)
+
+From [Chapter 1](/part1/chapter1-core#state_root--world-state-commitment-and-the-need-of-it):
+
+| Use Case | How state_root Helps |
+|----------|---------------------|
+| **Consensus** | Nodes must agree on the result, not just the transactions |
+| **Light clients** | Verify account state without downloading everything |
+| **State sync** | New nodes download current state, verify against state_root |
+
+### Computing the State Root
+
+We compute a merkle root over all accounts by scanning every key that starts with `"account:"`.
+
+**What does `scan_prefix` return?**
+
+When we call `scan_prefix(b"account:")`, sled returns an iterator over all key-value pairs where the key starts with that prefix:
+
+```
+Iteration 1:
+  key:   b"account:\xAA\xBB\xCC..."     (prefix + Alice's address bytes)
+  value: b"\x00\x00\x03\xE8..."         (rkyv-serialized Account struct)
+
+Iteration 2:
+  key:   b"account:\xDD\xEE\xFF..."     (prefix + Bob's address bytes)
+  value: b"\x00\x00\x01\xF4..."         (rkyv-serialized Account struct)
+
+... and so on for every account in the database
+```
+
+We hash each (key, value) pair together to create a leaf hash for the merkle tree:
+
+```rust
+use minichain_core::{Hash, merkle_root, hash};
+
+impl<'a> StateManager<'a> {
+    /// Compute the state root from all accounts.
+    pub fn compute_state_root(&self) -> Result<Hash> {
+        // Collect all account hashes
+        let mut account_hashes = Vec::new();
+
+        // Iterate over all accounts (prefix scan)
+        let prefix = b"account:";
+        for result in self.storage.db.scan_prefix(prefix) {
+            let (key, value) = result?;
+
+            // Hash the key-value pair together
+            let pair_hash = hash(&[key.as_ref(), value.as_ref()].concat());
+            account_hashes.push(pair_hash);
+        }
+
+        // Sort for deterministic ordering
+        account_hashes.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Compute merkle root
+        Ok(merkle_root(&account_hashes))
+    }
+}
+```
+
+<Aside type="caution">
+This naive implementation iterates all accounts every time. For a real blockchain with millions of accounts, you'd use an incremental structure like a **Merkle Patricia Trie** that updates in O(log n) time.
+</Aside>
+
+### Why Sort?
+
+Hash tables don't preserve insertion order. Without sorting, the same set of accounts could produce different merkle roots depending on iteration order. Sorting ensures **determinism** — every node computes the same root.
+
+### Batch Updates with Atomic Commits
+
+When executing a block, multiple accounts change. We need **atomic updates** — either all changes apply, or none do:
+
+```rust
+impl Storage {
+    /// Apply multiple operations atomically.
+    pub fn batch<F>(&self, f: F) -> Result<()>
+    where
+        F: FnOnce(&sled::Batch) -> Result<()>,
+    {
+        let batch = sled::Batch::default();
+        f(&batch)?;
+        self.db.apply_batch(batch)?;  // ← Atomicity happens HERE
+        Ok(())
+    }
+}
+```
+
+<Aside type="note" title="Where Does Atomicity Come From?">
+**`FnOnce` is NOT what provides atomicity.** It's just a Rust closure trait that means "this function can be called exactly once" (it may consume captured variables).
+
+The atomicity comes from **sled's `apply_batch`** method:
+
+| Component | What It Does | Provides Atomicity? |
+|-----------|--------------|---------------------|
+| `FnOnce` | Rust trait: closure callable once | No — just a type constraint |
+| `sled::Batch` | Collects operations in memory | No — just a buffer |
+| **`apply_batch`** | Writes all operations to disk together | **Yes** — database guarantee |
+
+**How `apply_batch` works:**
+1. All operations in the batch are written to sled's write-ahead log (WAL)
+2. If the write succeeds, all changes become visible atomically
+3. If the system crashes mid-write, sled recovers to a consistent state on restart
+
+This is a **database guarantee**, not a Rust language feature. The Rust code just provides a nice API pattern (closure-based batch building).
+</Aside>
+
+In practice, block execution would:
+
+```rust
+// Execute all transactions
+let state_changes = execute_block(&block)?;
+
+// Apply all changes atomically
+storage.batch(|batch| {
+    for (address, account) in state_changes {
+        let key = Storage::account_key(&address);
+        let bytes = rkyv::to_bytes::<_, 256>(&account)
+            .map_err(|_| StorageError::Serialization)?;
+        batch.insert(key, bytes.as_slice());
+    }
+    Ok(())
+})?;
+```
+
+<Aside type="tip" title="Bank Analogy">
+Batch updates are like a bank's **end-of-day processing**. All the day's transactions are applied together. If anything fails (system crash, invalid transaction), the day's changes are rolled back, and account balances remain as they were at the start of the day.
+</Aside>
+
+---
+
+## 2.7 Putting It Together
+
+Here's how the components work together:
+
+```rust
+// crates/storage/src/lib.rs
+
+pub mod db;
+pub mod state;
+pub mod chain;
+
+pub use db::{Storage, StorageError, Result};
+pub use state::StateManager;
+pub use chain::ChainStore;
+```
+
+### Usage Example
+
+```rust
+use minichain_storage::{Storage, StateManager, ChainStore};
+use minichain_core::{Account, Block, Address, Keypair};
+
+fn main() -> Result<()> {
+    // Open database
+    let storage = Storage::open("./blockchain_data")?;
+
+    // Initialize managers
+    let state = StateManager::new(&storage);
+    let chain = ChainStore::new(&storage);
+
+    // Check if we need to create genesis
+    if !chain.is_initialized()? {
+        let authority = Keypair::generate();
+        let genesis = Block::genesis(authority.address());
+        chain.init_genesis(&genesis)?;
+        println!("Genesis block created!");
+    }
+
+    // Create an account
+    let alice = Keypair::generate();
+    state.set_balance(&alice.address(), 1_000_000)?;
+
+    // Query state
+    let balance = state.get_balance(&alice.address())?;
+    println!("Alice's balance: {}", balance);
+
+    // Get chain info
+    let height = chain.get_height()?;
+    let head = chain.get_head()?.unwrap();
+    println!("Chain height: {}, head: {}", height, head.to_hex());
+
+    Ok(())
+}
+```
+
+---
+
+## Summary
+
+We've built the persistence layer:
+
+| Component | What It Does |
+|-----------|--------------|
+| `Storage` | sled database wrapper with serialization |
+| `StateManager` | Account CRUD, balances, nonces, contract storage |
+| `ChainStore` | Block storage, height/hash indexes, chain head |
+| State Root | Merkle root over all accounts for verification |
+
+### Key Patterns
+
+| Pattern | Why |
+|---------|-----|
+| Key prefixes (`account:`, `block:`) | Namespace isolation, prefix scanning |
+| Separate code storage | Fast account lookups, deduplication |
+| Atomic batch updates | Consistency after crashes |
+| State root computation | Consensus, light clients, state sync |
+
+### Tests Passing
+
+```bash
+$ cargo test -p minichain-storage
+
+running 12 tests
+test db::tests::test_open_temporary ... ok
+test db::tests::test_put_get ... ok
+test state::tests::test_account_crud ... ok
+test state::tests::test_balance_operations ... ok
+test chain::tests::test_genesis_init ... ok
+test chain::tests::test_block_by_height ... ok
+# ... all 12 tests pass
+```
+
+---
+
+## What's Next?
+
+With persistence in place, we're ready to build the **virtual machine** in [Chapter 3](/part3/chapter3-vm). The VM will:
+
+- Execute bytecode stored in contracts
+- Read/write to the storage layer via SLOAD/SSTORE
+- Track gas consumption
+- Return execution results
+
+The storage layer we built will serve as the VM's persistent backend — every SSTORE writes here, every SLOAD reads from here.
