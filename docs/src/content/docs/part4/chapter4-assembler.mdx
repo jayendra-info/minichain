@@ -1,0 +1,2073 @@
+---
+title: "Chapter 4: Assembly Language & Assembler"
+description: Building a human-readable assembly language and its compiler
+---
+
+import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+In [Chapter 3](/part3/chapter3-vm), we built a register-based virtual machine that executes bytecode. But writing raw bytecode is tedious and error-prone. Imagine debugging this:
+
+```
+70 00 0A 00 00 00 00 00 00 00 70 10 14 00 00 00 00 00 00 00 10 20 10 F0 20 00
+```
+
+What does it do? Who knows! You'd need to manually decode each opcode, track register values, and trace through jumps. This is like writing machine code in the 1950s — technically possible, but painfully inefficient.
+
+**Assembly language** is the solution. It provides human-readable mnemonics for opcodes, symbolic labels for jump targets, and comments for documentation:
+
+```asm
+; Calculate 10 + 20 and log the result
+.entry main
+
+main:
+    LOADI R0, 10      ; R0 = 10
+    LOADI R1, 20      ; R1 = 20
+    ADD R2, R0, R1    ; R2 = R0 + R1 = 30
+    LOG R2            ; output 30
+    HALT              ; stop
+```
+
+Now it's immediately clear what the code does. The **assembler** is the tool that translates this human-readable syntax into the compact bytecode our VM expects.
+
+## What We're Building
+
+By the end of this chapter, you'll understand how to build an assembler with:
+
+| Module | Purpose |
+|--------|---------|
+| `lexer.rs` | Tokenize assembly source into meaningful units (keywords, registers, numbers) |
+| `parser.rs` | Build Abstract Syntax Tree (AST) from tokens |
+| `compiler.rs` | Resolve labels and emit bytecode with correct jump addresses |
+| Error Handling | Provide helpful diagnostics with line numbers and context |
+
+---
+
+## Why an Assembler?
+
+### The Problem: Manual Bytecode Encoding
+
+Let's say you want to write a contract that increments a storage counter. In raw bytecode, you'd need to:
+
+1. **Encode opcodes** — Look up that LOADI is `0x70`, SLOAD is `0x50`, ADD is `0x10`, etc.
+2. **Pack registers** — Combine register numbers into nibbles: `R0` and `R1` → `0x01`
+3. **Handle immediates** — Encode the 64-bit value `1` as little-endian bytes
+4. **Calculate jump addresses** — If you add a line of code, all subsequent jumps need manual adjustment
+5. **No comments** — The bytecode has no space for documentation
+
+**Result:** Unmaintainable, unreadable, and error-prone.
+
+### The Solution: Assembly Language
+
+Assembly provides:
+
+- **Mnemonics** — `ADD R2, R0, R1` instead of `0x10 0x20 0x10`
+- **Symbolic labels** — `JUMP loop_start` instead of `JUMP 0x0014`
+- **Comments** — `;` for inline documentation
+- **Directives** — `.entry main` to specify the entry point
+- **Error messages** — "undefined label 'loop_end' at line 15" instead of silent corruption
+
+<Aside type="tip" title="Historical Parallel">
+In the 1950s, programming early computers meant writing raw machine code in binary or hexadecimal. Assembly language was a revolutionary step forward — it gave names to opcodes and let programmers write `ADD` instead of `0001011`. Modern high-level languages (C, Rust, Python) are further abstractions, but assembly remains the closest human-readable representation of what the CPU actually executes.
+</Aside>
+
+### Assembler as a Translator
+
+Think of the assembler as a **translator** or **document processor**:
+
+| Analogy | Assembly → Bytecode |
+|---------|---------------------|
+| **Translator** | Converts English text to French | Converts assembly mnemonics to opcodes |
+| **Compiler** | Converts C to machine code | Converts assembly to bytecode |
+| **Document Processor** | Converts Markdown to HTML | Converts high-level syntax to low-level format |
+
+The assembler doesn't change what the program *does* — it just makes it easier for humans to write and understand.
+
+---
+
+## 4.1 Assembly Language Syntax
+
+Before we implement the assembler, let's define the language it compiles.
+
+### Instruction Format
+
+Our assembly language has three main instruction formats:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| **RRR** (3 registers) | `ADD R2, R0, R1` | Destination + two sources |
+| **RR** (2 registers) | `MOV R0, R1` | Destination + one source |
+| **RI** (register + immediate) | `LOADI R0, 42` | Load a constant value |
+| **R** (1 register) | `JUMP R0` | Single operand |
+| **No operands** | `HALT` | Control flow |
+
+All instructions are **case-insensitive** (`ADD` = `add`), but we conventionally use uppercase for clarity.
+
+### Registers
+
+We have 16 general-purpose registers: **R0 through R15**
+
+| Registers | Common Usage |
+|-----------|-------------|
+| **R0-R11** | General purpose — use freely for computation |
+| **R12** | Frame pointer (for function local variables) |
+| **R13** | Stack pointer (for call stack management) |
+| **R14** | Link register (stores return address for CALL/RET) |
+| **R15** | Program counter (read-only via special instructions) |
+
+<Aside type="tip">
+While R12-R15 have conventional uses, they're not enforced by the VM. You can use them however you like, but following conventions makes your code more readable.
+</Aside>
+
+### Labels and Jumps
+
+Labels mark locations in code for jumps and calls:
+
+```asm
+loop_start:           ; Define a label
+    ADDI R0, R0, 1    ; Increment R0
+    LT R1, R0, R2     ; Compare R0 < R2
+    JUMPI R1, loop_start  ; If true, jump back
+```
+
+- **Label definition**: `name:` — marks the current address
+- **Label reference**: Use the label name as an operand
+
+Labels can be referenced **before** they're defined (forward references). The assembler handles this with a two-pass algorithm (explained in [section 4.5](#45-label-resolution-two-pass-compilation)).
+
+### Directives
+
+Directives control the assembler itself (not the VM):
+
+| Directive | Purpose | Example |
+|-----------|---------|---------|
+| `.entry` | Specify the entry point label | `.entry main` |
+| `.const` | Define a named constant (future feature) | `.const MAX_SUPPLY 1000000` |
+
+<Aside type="note">
+The `.entry` directive tells the assembler where execution should begin. Without it, execution starts at address 0 (the first instruction in the file).
+</Aside>
+
+### Comments
+
+Use semicolons (`;`) for comments. Everything after `;` on a line is ignored:
+
+```asm
+LOADI R0, 10     ; This is a comment
+; This entire line is a comment
+ADD R1, R0, R0   ; R1 = R0 + R0 = 20
+```
+
+### Complete Example
+
+Here's a simple counter contract with all syntax elements:
+
+```asm
+; Increment a storage counter
+.entry main
+
+main:
+    LOADI R0, 0          ; storage slot 0 = counter
+    SLOAD R1, R0         ; load current value (100 gas)
+    LOADI R2, 1          ; constant 1
+    ADD R1, R1, R2       ; increment (2 gas)
+    SSTORE R0, R1        ; save back (5000 gas)
+    HALT                 ; stop execution
+```
+
+**What this does:**
+1. Loads the value from storage slot 0
+2. Adds 1 to it
+3. Stores the result back
+4. Halts successfully
+
+---
+
+## 4.2 Instruction Reference
+
+This section provides a comprehensive reference for all VM opcodes. Each instruction shows its syntax, effect on VM state, and gas cost.
+
+### Control Flow Instructions
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `HALT` | `HALT` | Stop execution successfully | 0 |
+| `NOP` | `NOP` | Do nothing (no operation) | 0 |
+| `JUMP` | `JUMP Rtarget` | Unconditional jump: `PC = R[target]` | 8 |
+| `JUMPI` | `JUMPI Rcond, Rtarget` | Conditional jump: if `R[cond] != 0`, `PC = R[target]` | 8 |
+| `CALL` | `CALL Rtarget` | Call subroutine: push return address to R14, jump to `R[target]` | 700 |
+| `RET` | `RET` | Return from subroutine: jump to address in R14 | 8 |
+| `REVERT` | `REVERT` | Abort execution with error | 0 |
+
+<Aside type="tip" title="Jump Pattern">
+To jump to a label, you must first load its address into a register:
+
+```asm
+loop_start:
+    ; ... code ...
+    LOADI R5, loop_start   ; Load label address into R5
+    JUMP R5                ; Jump to that address
+```
+
+The assembler will replace `loop_start` in the `LOADI` with the actual bytecode address during compilation.
+</Aside>
+
+### Arithmetic Instructions
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `ADD` | `ADD Rdst, Rs1, Rs2` | `R[dst] = R[s1] + R[s2]` (wrapping) | 2 |
+| `SUB` | `SUB Rdst, Rs1, Rs2` | `R[dst] = R[s1] - R[s2]` (wrapping) | 2 |
+| `MUL` | `MUL Rdst, Rs1, Rs2` | `R[dst] = R[s1] * R[s2]` (wrapping) | 3 |
+| `DIV` | `DIV Rdst, Rs1, Rs2` | `R[dst] = R[s1] / R[s2]` (unsigned, traps if Rs2 = 0) | 5 |
+| `MOD` | `MOD Rdst, Rs1, Rs2` | `R[dst] = R[s1] % R[s2]` (unsigned modulo) | 5 |
+| `ADDI` | `ADDI Rdst, Rsrc, imm` | `R[dst] = R[src] + imm` (add immediate) | 2 |
+
+<Aside type="caution" title="Division by Zero">
+DIV and MOD will **trap** (halt execution with an error) if the divisor is zero. Always validate divisors before division:
+
+```asm
+ISZERO R2, R1        ; Check if R1 == 0
+JUMPI R2, error      ; If zero, jump to error handler
+DIV R3, R0, R1       ; Safe division
+```
+</Aside>
+
+### Bitwise Instructions
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `AND` | `AND Rdst, Rs1, Rs2` | `R[dst] = R[s1] & R[s2]` (bitwise AND) | 2 |
+| `OR` | `OR Rdst, Rs1, Rs2` | `R[dst] = R[s1] \| R[s2]` (bitwise OR) | 2 |
+| `XOR` | `XOR Rdst, Rs1, Rs2` | `R[dst] = R[s1] ^ R[s2]` (bitwise XOR) | 2 |
+| `NOT` | `NOT Rdst, Rsrc` | `R[dst] = ~R[src]` (bitwise NOT) | 2 |
+| `SHL` | `SHL Rdst, Rs1, Rs2` | `R[dst] = R[s1] << R[s2]` (logical left shift) | 5 |
+| `SHR` | `SHR Rdst, Rs1, Rs2` | `R[dst] = R[s1] >> R[s2]` (logical right shift) | 5 |
+
+### Comparison Instructions
+
+These instructions set the destination register to 1 (true) or 0 (false):
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `EQ` | `EQ Rdst, Rs1, Rs2` | `R[dst] = (R[s1] == R[s2]) ? 1 : 0` | 3 |
+| `NE` | `NE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] != R[s2]) ? 1 : 0` | 3 |
+| `LT` | `LT Rdst, Rs1, Rs2` | `R[dst] = (R[s1] < R[s2]) ? 1 : 0` (unsigned) | 3 |
+| `GT` | `GT Rdst, Rs1, Rs2` | `R[dst] = (R[s1] > R[s2]) ? 1 : 0` (unsigned) | 3 |
+| `LE` | `LE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] <= R[s2]) ? 1 : 0` | 3 |
+| `GE` | `GE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] >= R[s2]) ? 1 : 0` | 3 |
+| `ISZERO` | `ISZERO Rdst, Rsrc` | `R[dst] = (R[src] == 0) ? 1 : 0` | 3 |
+
+<Aside type="tip" title="Using Comparisons with JUMPI">
+Comparison instructions are designed to work with conditional jumps:
+
+```asm
+LT R5, R0, R1        ; R5 = (R0 < R1)
+JUMPI R5, less_than  ; Jump if R0 < R1
+; ... R0 >= R1 case ...
+less_than:
+; ... R0 < R1 case ...
+```
+</Aside>
+
+### Memory Instructions (RAM Operations)
+
+These instructions access temporary linear memory (like RAM on a computer). Memory is fast and cheap, but data is **lost when execution ends**.
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `LOAD8` | `LOAD8 Rdst, Raddr` | `R[dst] = Memory[R[addr]]` (1 byte) | 3 |
+| `LOAD64` | `LOAD64 Rdst, Raddr` | `R[dst] = Memory[R[addr]]` (8 bytes, little-endian) | 3 |
+| `STORE8` | `STORE8 Raddr, Rsrc` | `Memory[R[addr]] = R[src]` (1 byte) | 3 |
+| `STORE64` | `STORE64 Raddr, Rsrc` | `Memory[R[addr]] = R[src]` (8 bytes, little-endian) | 3 |
+| `MSIZE` | `MSIZE Rdst` | `R[dst] = size of memory in bytes` | 2 |
+| `MCOPY` | `MCOPY Rdst, Rsrc, Rlen` | `memcpy(R[dst], R[src], R[len])` | 3 + len |
+
+### Storage Instructions (Disk Operations)
+
+These instructions access persistent contract storage (like a hard drive). Storage is slow and expensive, but data **persists across transactions**.
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `SLOAD` | `SLOAD Rdst, Rkey` | `R[dst] = Storage[R[key]]` (persistent, 32-byte slot) | 100 |
+| `SSTORE` | `SSTORE Rkey, Rvalue` | `Storage[R[key]] = R[value]` (persistent, 32-byte slot) | 5,000 (reset) or 20,000 (set) |
+
+<Aside type="tip" title="Memory vs Storage: RAM vs Disk">
+**Critical distinction:**
+
+| Aspect | Memory (RAM) | Storage (Disk) |
+|--------|-------------|----------------|
+| **Persistence** | Temporary — cleared after execution | Permanent — survives across transactions |
+| **Speed** | Fast (in-memory array) | Slow (database read/write) |
+| **Cost** | Cheap (~3 gas per operation) | Expensive (~100 gas read, ~5,000-20,000 gas write) |
+| **Use Case** | Temporary computation, buffers, local variables | Contract state, balances, ownership records |
+
+**Example: Calculating a sum**
+
+```asm
+; Temporary calculation (use Memory - RAM)
+LOADI R0, 100        ; First number
+LOADI R1, 0          ; Memory address 0
+STORE64 R1, R0       ; Store to temporary memory (3 gas)
+
+; Permanent state (use Storage - Disk)
+LOADI R2, 0          ; Storage key 0
+SLOAD R3, R2         ; Load previous total from disk (100 gas)
+ADD R3, R3, R0       ; Add to it (2 gas)
+SSTORE R2, R3        ; Save back to disk (5000 gas) - persists!
+```
+
+This separation mirrors how real computers work: fast volatile RAM for active computation, slow persistent disk for data that must survive.
+</Aside>
+
+### Immediate Instructions
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `LOADI` | `LOADI Rdst, imm64` | `R[dst] = imm64` (load 64-bit constant) | 2 |
+| `MOV` | `MOV Rdst, Rsrc` | `R[dst] = R[src]` (register copy) | 2 |
+
+### Context Instructions
+
+These instructions provide information about the execution context:
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `CALLER` | `CALLER Rdst` | `R[dst] = caller's address` (as u64, truncated) | 2 |
+| `CALLVALUE` | `CALLVALUE Rdst` | `R[dst] = value sent with this call` | 2 |
+| `ADDRESS` | `ADDRESS Rdst` | `R[dst] = this contract's address` | 2 |
+| `BLOCKNUMBER` | `BLOCKNUMBER Rdst` | `R[dst] = current block number` | 2 |
+| `TIMESTAMP` | `TIMESTAMP Rdst` | `R[dst] = current block timestamp` | 2 |
+| `GAS` | `GAS Rdst` | `R[dst] = remaining gas` | 2 |
+
+<Aside type="note">
+Context instructions are useful for access control and time-based logic:
+
+```asm
+CALLER R0            ; Who is calling this contract?
+LOADI R1, 0xABCD...  ; Expected owner address
+EQ R2, R0, R1        ; Is caller == owner?
+JUMPI R2, authorized ; If yes, proceed
+REVERT               ; Otherwise, abort
+```
+</Aside>
+
+### Debug Instructions
+
+| Instruction | Syntax | Effect | Gas Cost |
+|------------|--------|--------|----------|
+| `LOG` | `LOG Rsrc` | Log `R[src]` value (for debugging, appears in execution trace) | 2 |
+
+---
+
+## 4.3 Lexer: Breaking Text into Tokens
+
+The first step in compilation is **tokenization** — breaking the source code into meaningful units called **tokens**.
+
+### What is Tokenization?
+
+Think of tokenization like **breaking a sentence into words**. Consider this English sentence:
+
+```
+The quick brown fox jumps.
+```
+
+A human naturally recognizes five words, punctuation, and spaces. A computer needs explicit rules to identify these boundaries.
+
+Similarly, this assembly line:
+
+```asm
+ADD R2, R0, R1
+```
+
+Must be broken into tokens:
+- `ADD` — instruction keyword
+- `R2` — register
+- `,` — comma separator
+- `R0` — register
+- `,` — comma separator
+- `R1` — register
+
+<Aside type="tip" title="Translator Analogy">
+If the assembler is a translator, the lexer is the person who **identifies individual words** before translating them. You can't translate a sentence until you know where one word ends and another begins.
+</Aside>
+
+### Token Types
+
+Here are the key token types we need to recognize:
+
+```rust
+#[derive(Logos, Debug, Clone, PartialEq)]
+pub enum Token {
+    // ========== Instructions (sample - not exhaustive) ==========
+    // Control flow
+    #[token("HALT", ignore(case))] Halt,
+    #[token("JUMP", ignore(case))] Jump,
+    #[token("JUMPI", ignore(case))] JumpI,
+    #[token("CALL", ignore(case))] Call,
+    #[token("RET", ignore(case))] Ret,
+    #[token("REVERT", ignore(case))] Revert,
+
+    // Arithmetic
+    #[token("ADD", ignore(case))] Add,
+    #[token("SUB", ignore(case))] Sub,
+    #[token("MUL", ignore(case))] Mul,
+    #[token("DIV", ignore(case))] Div,
+    #[token("MOD", ignore(case))] Mod,
+    #[token("ADDI", ignore(case))] AddI,
+
+    // Bitwise
+    #[token("AND", ignore(case))] And,
+    #[token("OR", ignore(case))] Or,
+    #[token("XOR", ignore(case))] Xor,
+    #[token("NOT", ignore(case))] Not,
+    #[token("SHL", ignore(case))] Shl,
+    #[token("SHR", ignore(case))] Shr,
+
+    // Comparison
+    #[token("EQ", ignore(case))] Eq,
+    #[token("NE", ignore(case))] Ne,
+    #[token("LT", ignore(case))] Lt,
+    #[token("GT", ignore(case))] Gt,
+    #[token("LE", ignore(case))] Le,
+    #[token("GE", ignore(case))] Ge,
+    #[token("ISZERO", ignore(case))] IsZero,
+
+    // Memory operations
+    #[token("LOAD8", ignore(case))] Load8,
+    #[token("LOAD64", ignore(case))] Load64,
+    #[token("STORE8", ignore(case))] Store8,
+    #[token("STORE64", ignore(case))] Store64,
+    #[token("MSIZE", ignore(case))] MSize,
+    #[token("MCOPY", ignore(case))] MCopy,
+
+    // Storage operations
+    #[token("SLOAD", ignore(case))] SLoad,
+    #[token("SSTORE", ignore(case))] SStore,
+
+    // Immediate/Move
+    #[token("LOADI", ignore(case))] LoadI,
+    #[token("MOV", ignore(case))] Mov,
+
+    // Context
+    #[token("CALLER", ignore(case))] Caller,
+    #[token("CALLVALUE", ignore(case))] CallValue,
+    #[token("ADDRESS", ignore(case))] Address,
+    #[token("BLOCKNUMBER", ignore(case))] BlockNumber,
+    #[token("TIMESTAMP", ignore(case))] Timestamp,
+    #[token("GAS", ignore(case))] Gas,
+
+    // Debug
+    #[token("LOG", ignore(case))] Log,
+
+    // ========== Registers ==========
+    #[regex(r"[Rr]([0-9]|1[0-5])", parse_register)]
+    Register(u8),
+
+    // ========== Numbers ==========
+    #[regex(r"[0-9]+", parse_number)]
+    Number(u64),
+
+    #[regex(r"0x[0-9a-fA-F]+", parse_hex_number)]
+    HexNumber(u64),
+
+    // ========== Identifiers (labels) ==========
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
+    Identifier(String),
+
+    // ========== Directives ==========
+    #[regex(r"\.[a-z]+", |lex| lex.slice()[1..].to_string())]
+    Directive(String),  // .entry, .const, etc.
+
+    // ========== Symbols ==========
+    #[token(",")] Comma,
+    #[token(":")] Colon,
+
+    // ========== Whitespace and comments (skipped) ==========
+    #[regex(r";[^\n]*", logos::skip)]  // Comments
+    #[regex(r"[ \t\n\r]+", logos::skip)]  // Whitespace
+
+    // ========== Errors ==========
+    #[error]
+    Error,
+}
+
+// Helper functions for parsing
+fn parse_register(lex: &mut logos::Lexer<Token>) -> Option<u8> {
+    let slice = lex.slice();
+    let num_str = &slice[1..];  // Skip 'R' or 'r'
+    num_str.parse().ok()
+}
+
+fn parse_number(lex: &mut logos::Lexer<Token>) -> Option<u64> {
+    lex.slice().parse().ok()
+}
+
+fn parse_hex_number(lex: &mut logos::Lexer<Token>) -> Option<u64> {
+    let slice = &lex.slice()[2..];  // Skip "0x"
+    u64::from_str_radix(slice, 16).ok()
+}
+```
+
+### Using the Logos Crate
+
+**Why logos?**
+
+Logos is a lexer generator that compiles tokenization rules into a **deterministic finite automaton (DFA)** at compile time. This means:
+
+1. **Performance** — Tokenization is as fast as hand-written code (sometimes faster)
+2. **Simplicity** — Define tokens with attributes, not complex regex libraries
+3. **Type safety** — Tokens are Rust enums, not strings
+4. **Error handling** — Invalid input produces an `Error` token
+
+Logos uses derive macros, so adding a new token is trivial:
+
+```rust
+#[token("NOP", ignore(case))]
+Nop,
+```
+
+<Aside type="note">
+The `#[token]` attribute matches exact strings, while `#[regex]` matches patterns. The `ignore(case)` parameter makes matching case-insensitive, so `ADD`, `Add`, and `add` all produce the same token.
+</Aside>
+
+### Example Tokenization
+
+**Input:**
+```asm
+LOADI R0, 10  ; load value
+```
+
+**Tokens:**
+```rust
+[
+    Token::LoadI,
+    Token::Register(0),
+    Token::Comma,
+    Token::Number(10),
+    // Comment is automatically skipped
+]
+```
+
+### Error Handling
+
+If the lexer encounters an invalid character or sequence, it produces an `Error` token:
+
+**Input:**
+```asm
+ADD R0, @invalid, R1
+```
+
+**Tokens:**
+```rust
+[
+    Token::Add,
+    Token::Register(0),
+    Token::Comma,
+    Token::Error,  // <-- Invalid '@' symbol
+    // ... rest of line may be corrupted
+]
+```
+
+The parser can then report: "Unexpected character '@' at line 1, column 9"
+
+### Line Number Tracking
+
+Logos provides `Span` information — the byte range of each token in the source. By counting newlines in skipped whitespace, we can maintain line numbers for error messages:
+
+```rust
+pub struct Lexer<'source> {
+    inner: logos::Lexer<'source, Token>,
+    line: usize,
+}
+
+impl<'source> Lexer<'source> {
+    pub fn new(source: &'source str) -> Self {
+        Self {
+            inner: Token::lexer(source),
+            line: 1,
+        }
+    }
+
+    pub fn next_token(&mut self) -> Option<(Token, usize)> {
+        self.inner.next().map(|result| {
+            let token = result.unwrap_or(Token::Error);
+            // Update line count if token contained newlines
+            let line = self.line;
+            (token, line)
+        })
+    }
+}
+```
+
+---
+
+## 4.4 Parser: Building the Syntax Tree
+
+The parser takes the flat stream of tokens and builds a hierarchical **Abstract Syntax Tree (AST)** that represents the program's structure.
+
+### What is an AST?
+
+An AST is a tree representation of the syntactic structure of source code. Think of it like:
+
+- **Document outline** — Sections, subsections, paragraphs
+- **Recipe structure** — Ingredients list, steps (some steps have sub-steps)
+- **Organization chart** — CEO → VPs → Managers → Employees
+
+For an assembler, the tree is simpler:
+
+```
+Program
+├── Directive(.entry main)
+├── Label(main)
+├── Instruction(LoadI { dst: R0, value: 10 })
+├── Instruction(Add { dst: R2, s1: R0, s2: R1 })
+└── Instruction(Halt)
+```
+
+<Aside type="tip" title="Why a Tree?">
+A flat token stream doesn't capture relationships:
+- Is this label part of this function?
+- Which instructions are inside a loop?
+- Where does this function end?
+
+The AST makes these relationships explicit, making later compilation steps easier.
+</Aside>
+
+### AST Node Types
+
+```rust
+/// Top-level program structure
+pub struct Program {
+    pub statements: Vec<Statement>,
+    pub entry_point: Option<String>,  // From .entry directive
+}
+
+/// Statement types
+pub enum Statement {
+    Label(String),              // loop_start:
+    Instruction(Instruction),   // ADD R0, R1, R2
+    Directive(Directive),       // .entry main
+}
+
+/// Directive types
+pub enum Directive {
+    Entry(String),              // .entry main
+    Const(String, u64),         // .const MAX 1000 (future)
+}
+
+/// Instruction categories (balanced sample)
+pub enum Instruction {
+    // ========== Control Flow ==========
+    Halt,
+    Nop,
+    Jump { target: u8 },
+    JumpI { cond: u8, target: u8 },
+    Call { target: u8 },
+    Ret,
+    Revert,
+
+    // ========== Arithmetic ==========
+    Add { dst: u8, s1: u8, s2: u8 },
+    Sub { dst: u8, s1: u8, s2: u8 },
+    Mul { dst: u8, s1: u8, s2: u8 },
+    Div { dst: u8, s1: u8, s2: u8 },
+    Mod { dst: u8, s1: u8, s2: u8 },
+    AddI { dst: u8, src: u8, imm: u64 },
+
+    // ========== Bitwise ==========
+    And { dst: u8, s1: u8, s2: u8 },
+    Or { dst: u8, s1: u8, s2: u8 },
+    Xor { dst: u8, s1: u8, s2: u8 },
+    Not { dst: u8, src: u8 },
+    Shl { dst: u8, s1: u8, s2: u8 },
+    Shr { dst: u8, s1: u8, s2: u8 },
+
+    // ========== Comparison ==========
+    Eq { dst: u8, s1: u8, s2: u8 },
+    Ne { dst: u8, s1: u8, s2: u8 },
+    Lt { dst: u8, s1: u8, s2: u8 },
+    Gt { dst: u8, s1: u8, s2: u8 },
+    Le { dst: u8, s1: u8, s2: u8 },
+    Ge { dst: u8, s1: u8, s2: u8 },
+    IsZero { dst: u8, src: u8 },
+
+    // ========== Memory ==========
+    Load8 { dst: u8, addr: u8 },
+    Load64 { dst: u8, addr: u8 },
+    Store8 { addr: u8, src: u8 },
+    Store64 { addr: u8, src: u8 },
+    MSize { dst: u8 },
+    MCopy { dst: u8, src: u8, len: u8 },
+
+    // ========== Storage ==========
+    SLoad { dst: u8, key: u8 },
+    SStore { key: u8, value: u8 },
+
+    // ========== Immediate ==========
+    LoadI { dst: u8, value: u64 },
+    Mov { dst: u8, src: u8 },
+
+    // ========== Context ==========
+    Caller { dst: u8 },
+    CallValue { dst: u8 },
+    Address { dst: u8 },
+    BlockNumber { dst: u8 },
+    Timestamp { dst: u8 },
+    Gas { dst: u8 },
+
+    // ========== Debug ==========
+    Log { src: u8 },
+}
+```
+
+### Parsing Strategy
+
+We use a **hand-written recursive descent parser**. This approach:
+- Reads tokens left-to-right
+- Calls functions recursively based on grammar rules
+- Provides excellent error messages
+- Easy to extend with new syntax
+
+**High-level parsing flow:**
+
+```rust
+pub struct Parser {
+    tokens: Vec<(Token, usize)>,  // (token, line_number)
+    position: usize,
+}
+
+impl Parser {
+    pub fn parse(source: &str) -> Result<Program, ParseError> {
+        let lexer = Lexer::new(source);
+        let tokens = lexer.collect();
+        let mut parser = Parser { tokens, position: 0 };
+        parser.parse_program()
+    }
+
+    fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let mut statements = Vec::new();
+        let mut entry_point = None;
+
+        while !self.is_at_end() {
+            let stmt = self.parse_statement()?;
+
+            // Track .entry directive
+            if let Statement::Directive(Directive::Entry(name)) = &stmt {
+                entry_point = Some(name.clone());
+            }
+
+            statements.push(stmt);
+        }
+
+        Ok(Program { statements, entry_point })
+    }
+
+    fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+        match self.peek() {
+            Token::Directive(name) => self.parse_directive(),
+            Token::Identifier(_) if self.peek_next() == Some(&Token::Colon) => {
+                self.parse_label()
+            }
+            _ => self.parse_instruction(),
+        }
+    }
+
+    fn parse_instruction(&mut self) -> Result<Statement, ParseError> {
+        let (token, line) = self.advance();
+
+        match token {
+            Token::Add => {
+                // Expect: ADD Rdst, Rs1, Rs2
+                let dst = self.expect_register()?;
+                self.expect_comma()?;
+                let s1 = self.expect_register()?;
+                self.expect_comma()?;
+                let s2 = self.expect_register()?;
+                Ok(Statement::Instruction(Instruction::Add { dst, s1, s2 }))
+            }
+
+            Token::LoadI => {
+                // Expect: LOADI Rdst, immediate
+                let dst = self.expect_register()?;
+                self.expect_comma()?;
+                let value = self.expect_number()?;
+                Ok(Statement::Instruction(Instruction::LoadI { dst, value }))
+            }
+
+            Token::Halt => {
+                Ok(Statement::Instruction(Instruction::Halt))
+            }
+
+            // ... handle all other instruction types
+
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "instruction",
+                found: token,
+                line,
+            }),
+        }
+    }
+}
+```
+
+<Aside type="note">
+This is a simplified version showing the pattern. A full parser would handle all 60+ opcodes, but they all follow the same structure: match the token, extract operands, build the AST node.
+</Aside>
+
+### Error Recovery
+
+When the parser encounters an error, it should:
+1. Report the error with line number
+2. Optionally try to recover and continue parsing
+3. Collect multiple errors in one pass (don't stop at the first error)
+
+**Example error message:**
+
+```
+error: expected register, found '42'
+  --> contract.asm:15:10
+   |
+15 |     ADD 42, R0, R1
+   |         ^^ expected register (R0-R15), found number
+```
+
+### Example Parse Tree
+
+**Assembly:**
+```asm
+.entry main
+
+main:
+    LOADI R0, 10
+    ADD R2, R0, R1
+```
+
+**AST:**
+```rust
+Program {
+    entry_point: Some("main"),
+    statements: [
+        Statement::Directive(Directive::Entry("main")),
+        Statement::Label("main"),
+        Statement::Instruction(Instruction::LoadI { dst: 0, value: 10 }),
+        Statement::Instruction(Instruction::Add { dst: 2, s1: 0, s2: 1 }),
+    ],
+}
+```
+
+---
+
+## 4.5 Label Resolution: Two-Pass Compilation
+
+Labels are symbolic names for addresses. The challenge: labels can be **forward referenced** — used before they're defined.
+
+### The Forward Reference Problem
+
+Consider this code:
+
+```asm
+    LOADI R5, loop_start   ; Line 1: Reference loop_start (what address?)
+    JUMP R5                ; Line 2: Jump to it
+    ; ... more code ...
+loop_start:                ; Line 10: Define loop_start
+    ADD R0, R0, R1
+```
+
+At line 1, we don't know loop_start's address yet — it's defined later at line 10. We can't emit the bytecode for line 1 without knowing the value to load into R5.
+
+**Solution: Two-pass compilation**
+
+### Pass 1: Build Symbol Table
+
+In the first pass, we scan the entire program and record the address of every label:
+
+```rust
+pub struct Compiler {
+    symbol_table: HashMap<String, u64>,  // label → address
+    current_address: u64,
+}
+
+impl Compiler {
+    fn first_pass(&mut self, program: &Program) -> Result<(), CompileError> {
+        self.current_address = 0;
+
+        for statement in &program.statements {
+            match statement {
+                Statement::Label(name) => {
+                    // Record this label's address
+                    if self.symbol_table.contains_key(name) {
+                        return Err(CompileError::DuplicateLabel(name.clone()));
+                    }
+                    self.symbol_table.insert(name.clone(), self.current_address);
+                }
+
+                Statement::Instruction(inst) => {
+                    // Advance address by instruction size
+                    self.current_address += inst.byte_size();
+                }
+
+                Statement::Directive(_) => {
+                    // Directives don't emit bytecode
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+**After Pass 1, the symbol table might look like:**
+
+| Label | Address |
+|-------|---------|
+| `main` | 0x0000 |
+| `loop_start` | 0x0014 |
+| `loop_end` | 0x002A |
+| `error_handler` | 0x0040 |
+
+### Pass 2: Emit Bytecode
+
+In the second pass, we emit actual bytecode, using the symbol table to resolve label references:
+
+```rust
+impl Compiler {
+    fn second_pass(&mut self, program: &Program) -> Result<Vec<u8>, CompileError> {
+        let mut bytecode = Vec::new();
+
+        for statement in &program.statements {
+            match statement {
+                Statement::Label(_) => {
+                    // Labels don't emit bytecode, just mark positions
+                }
+
+                Statement::Instruction(inst) => {
+                    self.emit_instruction(inst, &mut bytecode)?;
+                }
+
+                Statement::Directive(_) => {
+                    // Already processed
+                }
+            }
+        }
+
+        Ok(bytecode)
+    }
+
+    fn emit_instruction(&self, inst: &Instruction, bytecode: &mut Vec<u8>)
+        -> Result<(), CompileError>
+    {
+        match inst {
+            Instruction::LoadI { dst, value } => {
+                // Special case: if value is a label reference, resolve it
+                let resolved_value = if let Some(&addr) = self.symbol_table.get(&value.to_string()) {
+                    addr
+                } else {
+                    *value
+                };
+
+                bytecode.push(0x70);  // LOADI opcode
+                bytecode.push(*dst << 4);  // Register
+                bytecode.extend_from_slice(&resolved_value.to_le_bytes());  // Immediate
+            }
+
+            Instruction::Add { dst, s1, s2 } => {
+                bytecode.push(0x10);  // ADD opcode
+                bytecode.push((*dst << 4) | *s1);  // Pack dst and s1
+                bytecode.push(*s2 << 4);  // Pack s2
+            }
+
+            // ... handle all other instructions
+
+            _ => todo!(),
+        }
+
+        Ok(())
+    }
+}
+```
+
+### Complete Example Trace
+
+**Assembly:**
+```asm
+.entry main
+
+main:
+    LOADI R5, loop_start
+    JUMP R5
+
+loop_start:
+    ADDI R0, R0, 1
+    HALT
+```
+
+**Pass 1 (Symbol Collection):**
+```
+Address 0x0000: Label "main"
+Address 0x0000: LOADI (10 bytes)
+Address 0x000A: JUMP (2 bytes)
+Address 0x000C: Label "loop_start"
+Address 0x000C: ADDI (10 bytes)
+Address 0x0016: HALT (1 byte)
+
+Symbol Table:
+  main → 0x0000
+  loop_start → 0x000C
+```
+
+**Pass 2 (Bytecode Emission):**
+```
+0x0000: 70 50 0C 00 00 00 00 00 00 00  ; LOADI R5, 0x000C (loop_start)
+0x000A: 02 50                          ; JUMP R5
+0x000C: 15 00 01 00 00 00 00 00 00 00  ; ADDI R0, R0, 1
+0x0016: 00                              ; HALT
+```
+
+<Aside type="tip" title="Why Two Passes?">
+You *could* do this in one pass with a "backpatching" approach — emit placeholder bytes and then go back and fix them up. But two passes is conceptually simpler:
+- Pass 1: Collect all addresses
+- Pass 2: Emit all bytecode
+
+This separation also makes error handling cleaner — we can detect duplicate labels in Pass 1 before emitting any bytecode.
+</Aside>
+
+---
+
+## 4.6 Code Generation: Emitting Bytecode
+
+The final step is encoding AST instructions into the compact binary format our VM expects.
+
+### Instruction Encoding Formats
+
+Recall from [Chapter 3](/part3/chapter3-vm#32-instruction-encoding), we have three main formats:
+
+| Format | Bytes | Example | Encoding |
+|--------|-------|---------|----------|
+| **R** | 1-2 | `HALT`, `NOT R0` | `[opcode] [reg]` |
+| **RRR** | 3 | `ADD R2, R0, R1` | `[opcode] [dst\|s1] [s2\|pad]` |
+| **RI** | 10 | `LOADI R0, 42` | `[opcode] [reg] [imm64 le]` |
+
+### Bit-Packing Registers
+
+Registers are 4-bit values (0-15). We pack multiple registers into single bytes:
+
+```rust
+fn pack_rrr(dst: u8, s1: u8, s2: u8) -> [u8; 2] {
+    [
+        (dst << 4) | (s1 & 0x0F),  // First byte: dst (high 4 bits) | s1 (low 4 bits)
+        (s2 << 4),                 // Second byte: s2 (high 4 bits) | padding
+    ]
+}
+```
+
+**Example: `ADD R2, R0, R1`**
+
+```
+dst=2 (0010), s1=0 (0000), s2=1 (0001)
+
+Byte 1: (2 << 4) | 0 = 0x20 = 0b0010_0000
+Byte 2: (1 << 4)     = 0x10 = 0b0001_0000
+
+Bytecode: [0x10, 0x20, 0x10]
+          ^^^^^^ ^^^^^^ ^^^^^^
+          opcode  byte1  byte2
+```
+
+### Immediate Value Encoding
+
+64-bit immediate values are encoded in **little-endian** format:
+
+```rust
+fn encode_immediate(value: u64) -> [u8; 8] {
+    value.to_le_bytes()
+}
+```
+
+**Example: `LOADI R0, 12345`**
+
+```
+12345 = 0x0000000000003039 (hex)
+
+Little-endian bytes: [0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+Full instruction:
+[0x70, 0x00, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+ ^^^^^ ^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ opcode reg   64-bit immediate (little-endian)
+```
+
+### Complete Encoding Example
+
+**Assembly:**
+```asm
+main:
+    LOADI R0, 10      ; Load 10 into R0
+    LOADI R1, 20      ; Load 20 into R1
+    ADD R2, R0, R1    ; R2 = R0 + R1
+    LOG R2            ; Log R2
+    HALT              ; Stop
+```
+
+**Bytecode (with annotations):**
+
+```
+Address | Bytes                           | Instruction
+--------|---------------------------------|-------------
+0x0000  | 70 00 0A 00 00 00 00 00 00 00   | LOADI R0, 10
+0x000A  | 70 10 14 00 00 00 00 00 00 00   | LOADI R1, 20
+0x0014  | 10 20 10                        | ADD R2, R0, R1
+0x0017  | F0 20                           | LOG R2
+0x0019  | 00                              | HALT
+```
+
+**Detailed breakdown:**
+
+```
+LOADI R0, 10:
+  0x70 = LOADI opcode
+  0x00 = R0 (register 0 in high nibble: 0x00)
+  0x0A 0x00 0x00 0x00 0x00 0x00 0x00 0x00 = 10 as little-endian u64
+
+ADD R2, R0, R1:
+  0x10 = ADD opcode
+  0x20 = dst=R2 (0x2_) and s1=R0 (_0x0) → 0x20
+  0x10 = s2=R1 (0x1_) and padding (_0x0) → 0x10
+
+LOG R2:
+  0xF0 = LOG opcode
+  0x20 = R2 (register 2 in high nibble: 0x20)
+
+HALT:
+  0x00 = HALT opcode
+```
+
+### Memory Layout
+
+The bytecode is loaded into VM memory starting at address 0:
+
+```
+VM Memory:
+┌──────────────────────────────────────┐
+│ Address 0x0000: 0x70 (LOADI opcode)  │
+│ Address 0x0001: 0x00 (R0)            │
+│ Address 0x0002-0x0009: 10 (le u64)   │
+│ Address 0x000A: 0x70 (LOADI opcode)  │
+│ Address 0x000B: 0x10 (R1)            │
+│ ...                                   │
+│ Address 0x0019: 0x00 (HALT)          │
+└──────────────────────────────────────┘
+
+Program Counter (PC) starts at 0x0000
+```
+
+The VM's fetch-decode-execute loop reads from this bytecode, advancing the PC after each instruction.
+
+---
+
+## 4.7 Error Messages and Debugging
+
+Good error messages are crucial for developer experience. Let's look at common errors and how to report them.
+
+### Error Categories
+
+| Category | Example | Fix |
+|----------|---------|-----|
+| **Lexical** | `ADD R0, @invalid, R1` | Remove invalid character '@' |
+| **Syntax** | `ADD R0 R1 R2` | Missing commas between operands |
+| **Semantic** | `JUMP loop_end` (undefined label) | Define the label or fix the typo |
+| **Validation** | `ADD R99, R0, R1` | Register R99 is out of range (max R15) |
+
+### Example Error Messages
+
+**Undefined Label:**
+```
+error: undefined label 'loop_end'
+  --> contract.asm:15:10
+   |
+15 |     JUMP loop_end
+   |          ^^^^^^^^ label not found
+   |
+help: did you mean 'loop_start'?
+```
+
+**Invalid Register:**
+```
+error: invalid register 'R99'
+  --> contract.asm:8:10
+   |
+ 8 |     ADD R99, R0, R1
+   |         ^^^ register must be R0-R15
+```
+
+**Missing Operand:**
+```
+error: expected register, found end of line
+  --> contract.asm:12:8
+   |
+12 |     ADD R0,
+   |            ^ expected register after comma
+```
+
+**Duplicate Label:**
+```
+error: label 'main' defined multiple times
+  --> contract.asm:20:1
+   |
+ 5 | main:
+   | ---- first defined here
+   |
+20 | main:
+   | ^^^^ redefined here
+```
+
+### Error Reporting Structure
+
+```rust
+#[derive(Debug)]
+pub enum AssemblerError {
+    LexError {
+        line: usize,
+        column: usize,
+        message: String,
+    },
+    ParseError {
+        line: usize,
+        expected: String,
+        found: String,
+    },
+    UndefinedLabel {
+        label: String,
+        line: usize,
+    },
+    DuplicateLabel {
+        label: String,
+        first_line: usize,
+        second_line: usize,
+    },
+    InvalidRegister {
+        register: String,
+        line: usize,
+    },
+}
+
+impl AssemblerError {
+    pub fn format(&self, source: &str) -> String {
+        match self {
+            AssemblerError::UndefinedLabel { label, line } => {
+                format!(
+                    "error: undefined label '{}'\n  --> contract.asm:{}",
+                    label, line
+                )
+            }
+            // ... format other errors
+        }
+    }
+}
+```
+
+<Aside type="tip" title="Best Practices for Error Messages">
+1. **Be specific** — "expected register" is better than "syntax error"
+2. **Show context** — Display the offending line with a caret (^) pointing to the problem
+3. **Suggest fixes** — "did you mean 'loop_start'?" helps users recover quickly
+4. **Don't cascade** — One error shouldn't cause dozens of follow-up errors
+</Aside>
+
+---
+
+## 4.8 Writing Assembly Programs
+
+Now let's see realistic assembly patterns you'll actually use.
+
+### Example 1: Simple Counter (Expanded)
+
+This is the example from the chapter introduction, with detailed annotations:
+
+```asm
+; Increment a storage counter
+; Storage slot 0 holds the counter value
+.entry main
+
+main:
+    LOADI R0, 0          ; R0 = storage slot 0 (counter location)
+    SLOAD R1, R0         ; R1 = Storage[0] (load current value) - 100 gas
+    LOADI R2, 1          ; R2 = 1 (increment amount)
+    ADD R1, R1, R2       ; R1 = R1 + 1 (increment) - 2 gas
+    SSTORE R0, R1        ; Storage[0] = R1 (save back) - 5000 gas
+    HALT                 ; Stop execution successfully - 0 gas
+
+; Total gas: ~5102 gas
+```
+
+**Gas breakdown:**
+- SLOAD: 100 gas (reading from disk is expensive)
+- ADD: 2 gas (arithmetic is cheap)
+- SSTORE: 5000 gas (writing to disk is very expensive)
+
+### Example 2: Conditional Logic (If-Then-Else)
+
+Using `JUMPI` for branching:
+
+```asm
+; Check if balance >= amount, then transfer or revert
+.entry main
+
+main:
+    ; Load values
+    LOADI R10, 0         ; Storage slot 0 = balance
+    SLOAD R0, R10        ; R0 = current balance
+    LOADI R1, 100        ; R1 = amount to check
+
+    ; Compare: balance >= amount
+    GE R2, R0, R1        ; R2 = (R0 >= R1) ? 1 : 0
+    LOADI R3, transfer   ; R3 = address of 'transfer' label
+    JUMPI R2, R3         ; If R2 != 0, jump to transfer
+
+    ; Else branch: insufficient funds
+    REVERT               ; Abort execution
+
+transfer:
+    ; Transfer logic would go here
+    ; (subtract from balance, add to recipient, etc.)
+    HALT                 ; Success
+```
+
+<Aside type="note">
+This is the assembly equivalent of:
+```rust
+if balance >= amount {
+    transfer();
+} else {
+    revert();
+}
+```
+</Aside>
+
+### Example 3: Counting Loop
+
+Using labels for loop control:
+
+```asm
+; Sum numbers 1 to 10
+.entry main
+
+main:
+    LOADI R0, 0          ; R0 = counter = 0
+    LOADI R1, 0          ; R1 = sum = 0
+    LOADI R2, 10         ; R2 = limit = 10
+
+loop_start:
+    ADDI R0, R0, 1       ; counter++
+    ADD R1, R1, R0       ; sum += counter
+    LT R3, R0, R2        ; R3 = (counter < limit)
+    LOADI R4, loop_start ; R4 = address of loop_start
+    JUMPI R3, R4         ; If counter < limit, continue loop
+
+    ; Loop finished, R1 contains sum (55)
+    LOG R1               ; Output result
+    HALT
+```
+
+**Execution trace (first 3 iterations):**
+
+| Iteration | R0 (counter) | R1 (sum) | R3 (counter < 10) |
+|-----------|--------------|----------|-------------------|
+| 0 | 0 | 0 | — |
+| 1 | 1 | 1 | 1 (continue) |
+| 2 | 2 | 3 | 1 (continue) |
+| 3 | 3 | 6 | 1 (continue) |
+| ... | ... | ... | ... |
+| 10 | 10 | 55 | 0 (exit loop) |
+
+### Example 4: Function Calls with Stack
+
+Using `CALL` and `RET` with stack-based parameter passing:
+
+```asm
+; Call a function: result = add_ten(5)
+.entry main
+
+main:
+    ; Set up call
+    LOADI R0, 5          ; R0 = argument (5)
+    LOADI R1, 1000       ; R1 = stack address
+    STORE64 R1, R0       ; Push argument to stack
+    ADDI R1, R1, 8       ; Stack pointer += 8 (advance stack)
+
+    ; Call function
+    LOADI R2, add_ten    ; R2 = function address
+    CALL R2              ; Call function (stores return address in R14)
+
+    ; Result is in R0 after return
+    LOG R0               ; Log result (should be 15)
+    HALT
+
+add_ten:
+    ; Function prologue: load argument from stack
+    LOADI R1, 1000       ; R1 = stack address
+    LOAD64 R0, R1        ; R0 = argument from stack
+
+    ; Function body: add 10
+    LOADI R2, 10         ; R2 = 10
+    ADD R0, R0, R2       ; R0 = argument + 10 (result)
+
+    ; Function epilogue: return
+    RET                  ; Return to caller (jumps to address in R14)
+```
+
+<Aside type="tip" title="Function Calling Convention">
+This example uses a simple calling convention:
+- **Arguments** passed via stack (at fixed address 1000)
+- **Return value** in R0
+- **Return address** automatically stored in R14 by CALL
+- **Caller** responsible for stack setup/cleanup
+
+Real-world assembly often uses registers for the first few arguments (faster than stack access).
+</Aside>
+
+### Example 5: Array-Like Storage Access
+
+Computing storage keys for array elements:
+
+```asm
+; Write value to storage[base + index]
+.entry set_array_value
+
+set_array_value:
+    ; Array storage layout: base address + index = key
+    LOADI R0, 1000       ; R0 = array base address in storage
+    LOADI R1, 5          ; R1 = index (element 5)
+    LOADI R2, 42         ; R2 = value to store
+
+    ; Compute storage key
+    ADD R3, R0, R1       ; R3 = key = base + index = 1005
+
+    ; Store value
+    SSTORE R3, R2        ; Storage[1005] = 42
+    HALT
+
+; To read later:
+; LOADI R0, 1000
+; LOADI R1, 5
+; ADD R3, R0, R1
+; SLOAD R4, R3         ; R4 = Storage[1005] = 42
+```
+
+**Storage layout:**
+
+| Storage Key | Value | Meaning |
+|-------------|-------|---------|
+| 1000 | ? | array[0] |
+| 1001 | ? | array[1] |
+| 1002 | ? | array[2] |
+| ... | ... | ... |
+| 1005 | 42 | array[5] (our write) |
+
+<Aside type="note">
+This is similar to how Solidity implements dynamic arrays. The base address is hashed with the slot number, but the principle is the same: **offset indexing** into storage.
+</Aside>
+
+### Execution Trace Example
+
+Let's trace Example 1 (counter) through the VM:
+
+**Assembly:**
+```asm
+main:
+    LOADI R0, 0
+    SLOAD R1, R0
+    LOADI R2, 1
+    ADD R1, R1, R2
+    SSTORE R0, R1
+    HALT
+```
+
+**Execution trace:**
+
+| Step | PC | Instruction | R0 | R1 | R2 | Gas Left | Storage[0] |
+|------|-----|-------------|-----|-----|-----|----------|------------|
+| Init | 0x00 | — | 0 | 0 | 0 | 10000 | 5 |
+| 1 | 0x00 | LOADI R0, 0 | 0 | 0 | 0 | 9998 | 5 |
+| 2 | 0x0A | SLOAD R1, R0 | 0 | 5 | 0 | 9898 | 5 |
+| 3 | 0x0C | LOADI R2, 1 | 0 | 5 | 1 | 9896 | 5 |
+| 4 | 0x16 | ADD R1, R1, R2 | 0 | 6 | 1 | 9894 | 5 |
+| 5 | 0x19 | SSTORE R0, R1 | 0 | 6 | 1 | 4894 | 6 |
+| 6 | 0x1B | HALT | 0 | 6 | 1 | 4894 | 6 |
+
+**Result:** Success, gas used = 5106, storage[0] incremented from 5 to 6
+
+---
+
+## 4.9 Macros and Constants
+
+To make assembly more maintainable, we support constants and (in the future) macros.
+
+### Constants (.const)
+
+Constants give meaningful names to magic numbers:
+
+```asm
+; Define constants
+.const MAX_SUPPLY 1000000
+.const OWNER_SLOT 0
+.const BALANCE_BASE 1000
+
+.entry main
+
+main:
+    ; Load owner address from storage
+    LOADI R0, OWNER_SLOT     ; R0 = 0 (expands to storage slot 0)
+    SLOAD R1, R0             ; R1 = Storage[0] = owner address
+
+    ; Check if supply exceeds max
+    LOADI R2, 100            ; Current supply storage slot
+    SLOAD R3, R2             ; R3 = current supply
+    LOADI R4, MAX_SUPPLY     ; R4 = 1000000 (constant)
+    GT R5, R3, R4            ; R5 = (supply > max)
+    LOADI R6, error          ; R6 = error handler address
+    JUMPI R5, R6             ; If exceeded, jump to error
+
+    ; Success path...
+    HALT
+
+error:
+    REVERT
+```
+
+**Why constants matter:**
+
+| Without Constants | With Constants |
+|-------------------|----------------|
+| `LOADI R0, 0` | `LOADI R0, OWNER_SLOT` |
+| What does 0 mean? | Clearly owner storage |
+| Change requires find-replace | Change in one place |
+
+<Aside type="tip">
+Constants are evaluated at **compile time**. The assembler replaces `MAX_SUPPLY` with `1000000` before emitting bytecode. There's no runtime cost.
+</Aside>
+
+### Future: Macro Support
+
+Planned `.macro` directive for code reuse:
+
+```asm
+; Define a macro for safe division
+.macro safe_div(result, dividend, divisor, error_label)
+    ISZERO R15, \divisor        ; Check divisor == 0
+    LOADI R14, \error_label     ; Load error address
+    JUMPI R15, R14              ; If zero, jump to error
+    DIV \result, \dividend, \divisor  ; Safe division
+.endmacro
+
+; Usage:
+main:
+    LOADI R0, 10
+    LOADI R1, 2
+    safe_div(R2, R0, R1, error)  ; Expands to 4 instructions
+    HALT
+
+error:
+    REVERT
+```
+
+Macros are **textual substitution** — they expand before parsing. This is similar to C preprocessor macros.
+
+---
+
+## 4.10 Writing Efficient Assembly
+
+Gas costs add up quickly. Here are optimization techniques to write gas-efficient code.
+
+### Register Allocation
+
+**Principle:** Registers are free, memory costs gas.
+
+**Bad (uses memory unnecessarily):**
+```asm
+LOADI R0, 100
+LOADI R1, 0         ; Memory address
+STORE64 R1, R0      ; 3 gas
+LOAD64 R2, R1       ; 3 gas
+ADD R2, R2, R0      ; Use the value
+; Total: 6 gas for temporary storage
+```
+
+**Good (reuses register):**
+```asm
+LOADI R0, 100
+MOV R2, R0          ; 2 gas (or just use R0 directly)
+ADD R2, R2, R0
+; Total: 2 gas
+```
+
+<Aside type="tip">
+We have 16 registers. Use R0-R11 freely for computation. Only spill to memory when you truly run out of registers.
+</Aside>
+
+### Gas Cost Awareness
+
+**Remember the cost hierarchy:**
+
+| Operation | Cost | When to Use |
+|-----------|------|-------------|
+| Registers (ADD, MOV) | 2-3 gas | Always prefer |
+| Memory (LOAD64, STORE64) | 3 gas | Temporary data |
+| Storage read (SLOAD) | 100 gas | Read once, cache in register |
+| Storage write (SSTORE) | 5,000-20,000 gas | Only when necessary |
+
+**Bad (repeated SLOAD):**
+```asm
+LOADI R0, 0
+SLOAD R1, R0        ; 100 gas
+ADD R1, R1, R2
+SLOAD R1, R0        ; 100 gas again!
+ADD R1, R1, R3
+; Total: 200 gas for storage reads
+```
+
+**Good (cache in register):**
+```asm
+LOADI R0, 0
+SLOAD R1, R0        ; 100 gas (read once)
+ADD R1, R1, R2      ; Use cached value
+ADD R1, R1, R3      ; Use cached value again
+SSTORE R0, R1       ; 5000 gas (write once at the end)
+; Total: 100 gas for storage reads (saved 100 gas!)
+```
+
+### Common Optimizations
+
+**1. Loop Unrolling**
+
+If you know the iteration count is small, unroll the loop:
+
+**Before:**
+```asm
+LOADI R0, 0         ; counter
+loop:
+    ADD R1, R1, R2  ; accumulate
+    ADDI R0, R0, 1  ; increment counter
+    LT R3, R0, 3    ; counter < 3?
+    LOADI R4, loop
+    JUMPI R3, R4    ; loop
+; Cost: 3 iterations × (2 + 2 + 3 + 2 + 8) = 51 gas
+```
+
+**After (unrolled):**
+```asm
+ADD R1, R1, R2      ; 2 gas
+ADD R1, R1, R2      ; 2 gas
+ADD R1, R1, R2      ; 2 gas
+; Cost: 6 gas (saved 45 gas!)
+```
+
+**2. Strength Reduction**
+
+Replace expensive operations with cheaper ones:
+
+**Multiply by 2 (expensive):**
+```asm
+MUL R0, R0, 2       ; 3 gas
+```
+
+**Shift left by 1 (cheaper):**
+```asm
+SHL R0, R0, 1       ; 5 gas... wait, this is MORE expensive!
+```
+
+Actually, for powers of 2, `ADD R0, R0, R0` (2 gas) is cheapest!
+
+**3. Dead Code Elimination**
+
+Remove code that doesn't affect the result:
+
+**Before:**
+```asm
+LOADI R0, 100
+LOADI R1, 200       ; R1 is set but never used
+ADD R2, R0, R0
+```
+
+**After:**
+```asm
+LOADI R0, 100
+ADD R2, R0, R0
+; Saved 2 gas by removing unused LOADI
+```
+
+<Aside type="caution">
+Optimization can hurt readability. Only optimize hot paths (code that runs frequently or costs a lot of gas). For one-time setup code, clarity is more important than saving 10 gas.
+</Aside>
+
+---
+
+## 4.11 For Ethereum Developers
+
+If you're coming from Ethereum/Solidity, here's how our assembly compares to EVM assembly.
+
+### Stack-Based vs Register-Based
+
+**EVM (Stack-Based):**
+```
+PUSH1 0x03
+PUSH1 0x04
+ADD
+; Stack: [7]
+```
+
+**Minichain (Register-Based):**
+```asm
+LOADI R0, 3
+LOADI R1, 4
+ADD R2, R0, R1
+; R2 = 7
+```
+
+| Aspect | EVM | Minichain |
+|--------|-----|-----------|
+| **Data Location** | Stack (implicit) | Registers (explicit) |
+| **Instruction Count** | More (push/pop overhead) | Fewer |
+| **Readability** | Harder (mental stack tracking) | Easier (named registers) |
+| **Optimization** | Limited (stack constraints) | Better (registers map to CPU) |
+
+### Why Register-Based?
+
+1. **Clarity** — `ADD R2, R0, R1` is self-documenting. You see exactly where data comes from and goes to.
+2. **Efficiency** — Fewer instructions = less bytecode = lower gas to deploy (in a system that charged for bytecode size).
+3. **Familiarity** — Most physical CPUs (x86, ARM, RISC-V) are register-based.
+
+<Aside type="note">
+Ethereum chose stack-based for **compactness**. Stack operations don't need to specify operand locations (they're always the top of the stack), so each instruction is smaller. Since Ethereum charges gas to store bytecode on-chain, smaller bytecode = cheaper deployment.
+
+We prioritize **learning clarity** over deployment cost.
+</Aside>
+
+### Opcode Mapping
+
+| Operation | EVM | Minichain | Notes |
+|-----------|-----|-----------|-------|
+| **Push constant** | `PUSH1 0x03` | `LOADI R0, 3` | EVM has PUSH1-PUSH32 for different sizes |
+| **Add** | `ADD` | `ADD R2, R0, R1` | EVM pops 2, pushes 1. We specify operands. |
+| **Storage read** | `SLOAD` | `SLOAD Rdst, Rkey` | Similar cost (~100 gas) |
+| **Storage write** | `SSTORE` | `SSTORE Rkey, Rval` | Similar cost (~5000-20000 gas) |
+| **Memory read** | `MLOAD` | `LOAD64 Rdst, Raddr` | Both access temporary memory |
+| **Conditional jump** | `JUMPI` | `JUMPI Rcond, Rtarget` | Both jump if condition is true |
+| **Call function** | `CALL` | `CALL Rtarget` | EVM's CALL is more complex (external calls) |
+
+### Gas Cost Philosophy
+
+Both VMs follow the same principle: **Storage >> Memory > Computation**
+
+| Cost Tier | EVM | Minichain | Reasoning |
+|-----------|-----|-----------|-----------|
+| **Tier 1: Cheap** | ADD (3 gas) | ADD (2 gas) | CPU-bound |
+| **Tier 2: Medium** | MLOAD (3 gas) | LOAD64 (3 gas) | RAM access |
+| **Tier 3: Expensive** | SLOAD (100-2100 gas) | SLOAD (100 gas) | Disk I/O |
+| **Tier 4: Very Expensive** | SSTORE (5000-20000 gas) | SSTORE (5000-20000 gas) | Persistent write |
+
+<Aside type="tip" title="For Solidity Developers">
+If you've optimized Solidity contracts, the same patterns apply:
+- Cache storage reads in memory/registers
+- Minimize SSTORE operations
+- Use memory for temporary data
+- Pack small values into single storage slots (we don't support this yet, but the principle is the same)
+</Aside>
+
+---
+
+## 4.12 Development Tools
+
+Practical advice for writing and debugging assembly.
+
+### Syntax Highlighting
+
+Assembly is more readable with syntax highlighting. Here's a basic VSCode snippet:
+
+```json
+// .vscode/minichain-asm.json
+{
+    "fileTypes": ["asm"],
+    "name": "Minichain Assembly",
+    "patterns": [
+        {
+            "match": "\\b(ADD|SUB|MUL|DIV|MOD|LOADI|SLOAD|SSTORE|HALT|JUMP|JUMPI)\\b",
+            "name": "keyword.control.asm"
+        },
+        {
+            "match": "\\bR([0-9]|1[0-5])\\b",
+            "name": "variable.parameter.register.asm"
+        },
+        {
+            "match": ";.*$",
+            "name": "comment.line.semicolon.asm"
+        },
+        {
+            "match": "^[a-zA-Z_][a-zA-Z0-9_]*:",
+            "name": "entity.name.function.asm"
+        },
+        {
+            "match": "\\.[a-z]+",
+            "name": "keyword.directive.asm"
+        }
+    ],
+    "scopeName": "source.asm"
+}
+```
+
+**Vim users:** Create `~/.vim/syntax/minichain.vim` with similar rules.
+
+### Editor Integration
+
+**VSCode settings:**
+```json
+// .vscode/settings.json
+{
+  "files.associations": {
+    "*.asm": "minichain-assembly"
+  },
+  "editor.tabSize": 4,
+  "editor.insertSpaces": true
+}
+```
+
+### Assembler CLI
+
+A command-line interface for the assembler:
+
+```bash
+# Assemble a contract
+minichain-asm assemble counter.asm -o counter.bin
+
+# Show bytecode in hex
+minichain-asm assemble counter.asm --hex
+
+# Disassemble bytecode back to assembly
+minichain-asm disassemble counter.bin
+
+# Assemble and run in VM
+minichain-asm run counter.asm --gas-limit 10000 --trace
+```
+
+### Debugging Workflow
+
+1. **Write assembly** in your editor with syntax highlighting
+2. **Assemble** and check for errors:
+   ```bash
+   minichain-asm assemble contract.asm
+   ```
+3. **Run in VM** with tracing enabled:
+   ```bash
+   minichain-asm run contract.asm --trace
+   ```
+4. **Review execution trace** to find issues:
+   ```
+   0: PC=0000 LOADI gas=9998 R0=10 R1=0 R2=0
+   1: PC=000A LOADI gas=9996 R0=10 R1=20 R2=0
+   2: PC=0014 ADD   gas=9994 R0=10 R1=20 R2=30
+   ```
+5. **Optimize** hot paths (see [section 4.10](#410-writing-efficient-assembly))
+
+<Aside type="tip" title="Debugging Tips">
+- Use `LOG` instructions to output register values at key points
+- Enable VM tracing to see every instruction executed
+- Check gas consumption — unexpected spikes indicate inefficiency
+- Verify storage state after execution with storage dumps
+</Aside>
+
+---
+
+## 4.13 From Assembly to Execution
+
+Let's see the complete pipeline from assembly source to VM execution.
+
+### The Complete Pipeline
+
+```
+┌─────────────────┐
+│  Assembly Code  │  counter.asm
+│  (human-written)│
+└────────┬────────┘
+         │
+         │ Lexer
+         ▼
+┌─────────────────┐
+│  Token Stream   │  [LoadI, Register(0), Comma, Number(10), ...]
+└────────┬────────┘
+         │
+         │ Parser
+         ▼
+┌─────────────────┐
+│   AST (Tree)    │  Program { statements: [...], entry: Some("main") }
+└────────┬────────┘
+         │
+         │ Compiler (Pass 1: Collect Labels)
+         ▼
+┌─────────────────┐
+│  Symbol Table   │  { "main": 0x0000, "loop": 0x0014, ... }
+└────────┬────────┘
+         │
+         │ Compiler (Pass 2: Emit Bytecode)
+         ▼
+┌─────────────────┐
+│    Bytecode     │  [0x70, 0x00, 0x0A, 0x00, ..., 0x00]
+│  (binary file)  │
+└────────┬────────┘
+         │
+         │ VM Loader
+         ▼
+┌─────────────────┐
+│   VM Memory     │  Bytecode loaded at address 0
+│                 │  PC = 0, Gas = limit, Registers = [0; 16]
+└────────┬────────┘
+         │
+         │ VM Executor (Fetch-Decode-Execute Loop)
+         ▼
+┌─────────────────┐
+│ Execution       │  Success/Revert, Gas Used, Logs, Storage Changes
+│   Result        │
+└─────────────────┘
+```
+
+### Example: End-to-End
+
+**1. Assembly Source (`counter.asm`):**
+```asm
+.entry main
+
+main:
+    LOADI R0, 0
+    SLOAD R1, R0
+    LOADI R2, 1
+    ADD R1, R1, R2
+    SSTORE R0, R1
+    HALT
+```
+
+**2. Compiled Bytecode (hex):**
+```
+70 00 00 00 00 00 00 00 00 00 00
+50 10
+70 20 01 00 00 00 00 00 00 00
+10 11 20
+51 01
+00
+```
+
+**3. VM Execution:**
+```bash
+$ minichain-vm run counter.bin --gas-limit 10000 --trace
+```
+
+**4. Execution Trace:**
+```
+   0: PC=0x0000 LOADI R0, 0          | gas=9998 | R0=0
+   1: PC=0x000A SLOAD R1, R0         | gas=9898 | R0=0 R1=5
+   2: PC=0x000C LOADI R2, 1          | gas=9896 | R0=0 R1=5 R2=1
+   3: PC=0x0016 ADD R1, R1, R2       | gas=9894 | R0=0 R1=6 R2=1
+   4: PC=0x0019 SSTORE R0, R1        | gas=4894 | R0=0 R1=6 R2=1
+   5: PC=0x001B HALT                 | gas=4894 |
+
+Execution Result:
+  Status: Success
+  Gas Used: 5106 / 10000
+  Storage Changes:
+    Slot 0x0000: 5 → 6
+```
+
+**5. Verification:**
+- Counter incremented from 5 to 6 ✓
+- Gas consumption: 5106 (SLOAD 100 + SSTORE 5000 + others 6) ✓
+- No errors ✓
+
+### Debugging Assembly with VM Tracer
+
+The VM tracer (from [Chapter 3](/part3/chapter3-vm#37-execution-tracing)) is invaluable for debugging:
+
+```bash
+minichain-vm run contract.asm --trace --trace-storage
+```
+
+**Trace options:**
+- `--trace` — Show every instruction executed
+- `--trace-storage` — Show storage reads/writes
+- `--trace-memory` — Show memory accesses
+- `--gas-report` — Show gas consumption breakdown
+
+**Example trace output:**
+```
+Step 15: PC=0x0042 JUMPI R5, R3
+  Condition: R5 = 1 (true)
+  Target: R3 = 0x0014
+  → Taking jump to 0x0014
+
+Step 16: PC=0x0014 SLOAD R7, R6
+  Key: R6 = 0x0000
+  Value: Storage[0x0000] = 42
+  Cost: 100 gas
+  → R7 = 42
+```
+
+This level of detail makes it easy to spot:
+- Incorrect jump targets
+- Wrong register operands
+- Unexpected storage values
+- Gas cost surprises
+
+---
+
+## Summary
+
+We've built a complete assembler for our blockchain VM:
+
+| Component | What It Does | Input | Output |
+|-----------|--------------|-------|--------|
+| **Lexer** | Tokenization | Assembly text | Token stream |
+| **Parser** | Syntax analysis | Tokens | AST (Abstract Syntax Tree) |
+| **Compiler Pass 1** | Symbol collection | AST | Symbol table (labels → addresses) |
+| **Compiler Pass 2** | Code generation | AST + Symbols | Bytecode (binary) |
+| **Error Handler** | Diagnostics | Parse/compile errors | Human-readable messages |
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Register-based syntax** | Matches VM architecture, more readable than stack-based |
+| **Two-pass compilation** | Handles forward label references elegantly |
+| **Logos for lexing** | Compile-time DFA generation → fast, type-safe tokenization |
+| **Hand-written parser** | Better error messages than parser generators |
+| **Line number tracking** | Essential for debugging — tell users exactly where errors are |
+| **Symbolic labels** | Humans think in names ("loop_start"), not addresses (0x0042) |
+
+### Key Takeaways
+
+1. **Assembly bridges the gap** between human-readable code and machine-executable bytecode
+2. **Lexer → Parser → Compiler** is the standard compilation pipeline
+3. **Two-pass compilation** solves forward references without complex backpatching
+4. **Good error messages** are critical for developer experience
+5. **Gas costs matter** — write assembly with optimization in mind
+6. **Debugging tools** (tracers, disassemblers) are essential for development
+
+### Comparison: Manual vs Assembly
+
+| Aspect | Manual Bytecode | Assembly Language |
+|--------|-----------------|-------------------|
+| **Readability** | Hex dump (incomprehensible) | Mnemonics + labels (clear) |
+| **Maintainability** | One change breaks everything | Add lines without renumbering |
+| **Error Detection** | Silent corruption | Compile-time checks |
+| **Documentation** | Impossible to comment | Inline comments with `;` |
+| **Development Speed** | Hours per 10 lines | Minutes per 100 lines |
+
+---
+
+## What's Next?
+
+With a working assembler, we can now write smart contracts in readable assembly. In **Chapter 5: Blockchain Layer**, we'll build the chain logic that:
+
+- Validates and executes transactions
+- Runs contract bytecode in the VM
+- Updates state via the storage layer
+- Builds blocks with transaction batches
+- Maintains consensus with validators
+
+The assembler provides the tooling to write contracts. The blockchain layer will provide the environment to run them in a decentralized system.
+

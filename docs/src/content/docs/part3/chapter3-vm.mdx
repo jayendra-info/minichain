@@ -332,7 +332,11 @@ pub enum Opcode {
     /// R[dst] = R[src] == 0 ? 1 : 0
     ISZERO = 0x36,
 
-    // =========== Memory (0x40-0x4F) ===========
+    // =========== Memory (0x40-0x4F) - RAM Operations ===========
+    // These access temporary linear memory (like RAM on a computer).
+    // Fast and cheap, but data is lost when execution ends.
+    // Use for temporary computation, buffers, and working data.
+
     /// R[dst] = Memory[R[addr]] (1 byte)
     LOAD8 = 0x40,
     /// R[dst] = Memory[R[addr]] (8 bytes, little-endian)
@@ -346,7 +350,11 @@ pub enum Opcode {
     /// Copy memory: memcpy(R[dst], R[src], R[len])
     MCOPY = 0x45,
 
-    // =========== Storage (0x50-0x5F) ===========
+    // =========== Storage (0x50-0x5F) - Disk Operations ===========
+    // These access persistent contract storage (like a hard drive).
+    // Slow and expensive, but data persists across transactions.
+    // Use for contract state that must survive (balances, ownership, etc.).
+
     /// R[dst] = Storage[R[key]] (persistent, 32-byte slot)
     SLOAD = 0x50,
     /// Storage[R[key]] = R[value] (persistent, 32-byte slot)
@@ -377,6 +385,35 @@ pub enum Opcode {
     LOG = 0xF0,
 }
 ```
+
+<Aside type="tip" title="Memory vs Storage: RAM vs Disk">
+**Why do we need both Memory and Storage opcodes?**
+
+| Aspect | Memory (RAM) | Storage (Disk) |
+|--------|-------------|----------------|
+| **Persistence** | Temporary — cleared after execution | Permanent — survives across transactions |
+| **Speed** | Fast (in-memory array) | Slow (database read/write) |
+| **Cost** | Cheap (~3 gas per operation) | Expensive (~100 gas read, ~5,000-20,000 gas write) |
+| **Use Case** | Temporary computation, buffers, local variables | Contract state, balances, ownership records |
+| **Analogy** | RAM in your computer | Hard drive in your computer |
+
+**Example:** If you're calculating the sum of 100 numbers, you'd use Memory opcodes (LOAD64/STORE64) to store intermediate results. But if you want to save the final total so it's available in the next transaction, you'd use SSTORE to write it to Storage.
+
+```asm
+; Temporary calculation (use Memory - RAM)
+LOADI R0, 100        ; First number
+LOADI R1, 0          ; Memory address 0
+STORE64 R1, R0       ; Store to temporary memory
+
+; Permanent state (use Storage - Disk)
+LOADI R2, 0          ; Storage key 0
+SLOAD R3, R2         ; Load previous total from disk
+ADD R3, R3, R0       ; Add to it
+SSTORE R2, R3        ; Save back to disk (persists!)
+```
+
+This separation mirrors how real computers work: fast volatile RAM for active computation, slow persistent disk for data that must survive.
+</Aside>
 
 ### Implementing Opcode Parsing
 
@@ -755,6 +792,8 @@ impl Vm {
 ```
 
 ### Decoding Helpers
+
+These helper functions extract register operands from the packed binary instruction format. Since we pack multiple 4-bit register numbers into single bytes to keep bytecode compact, we need bit-shifting and masking to extract individual register indices. Each helper corresponds to one of the instruction formats (R, RR, RRR) defined in section 3.2.
 
 ```rust
 impl Vm {
