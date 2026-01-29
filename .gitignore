@@ -19,6 +19,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Blockchain data (CLI testing)
+data/
+
 # Debug / Logs
 *.log
 npm-debug.log*
