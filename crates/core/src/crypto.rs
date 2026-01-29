@@ -202,8 +202,7 @@ impl PublicKey {
 
     /// Verify a signature against this public key.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), CryptoError> {
-        let sig =
-            DalekSignature::from_bytes(&signature.0);
+        let sig = DalekSignature::from_bytes(&signature.0);
         self.0
             .verify(message, &sig)
             .map_err(|_| CryptoError::VerificationFailed)

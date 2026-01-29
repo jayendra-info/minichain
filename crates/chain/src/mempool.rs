@@ -102,7 +102,7 @@ impl Mempool {
         }
 
         // Check per-sender capacity
-        let sender_txs = self.by_sender.entry(tx.from).or_insert_with(VecDeque::new);
+        let sender_txs = self.by_sender.entry(tx.from).or_default();
         if sender_txs.len() >= self.config.max_per_account {
             return Err(MempoolError::MempoolFull(self.config.max_per_account));
         }

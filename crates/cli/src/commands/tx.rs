@@ -1,1 +1,243 @@
-//! Transaction command.
+//! Transaction operations command.
+
+use anyhow::{bail, Context, Result};
+use clap::{Args, Subcommand};
+use colored::Colorize;
+use minichain_chain::{Blockchain, BlockchainConfig};
+use minichain_consensus::PoAConfig;
+use minichain_core::{Address, Keypair, Transaction};
+use minichain_storage::Storage;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[derive(Args)]
+pub struct TxArgs {
+    #[command(subcommand)]
+    command: TxCommand,
+}
+
+#[derive(Subcommand)]
+enum TxCommand {
+    /// Send a transfer transaction
+    Send {
+        /// Directory to store blockchain data
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+
+        /// Sender keypair file
+        #[arg(short, long)]
+        from: String,
+
+        /// Recipient address
+        #[arg(short, long)]
+        to: String,
+
+        /// Amount to send
+        #[arg(short, long)]
+        amount: u64,
+
+        /// Gas price
+        #[arg(long, default_value = "1")]
+        gas_price: u64,
+    },
+}
+
+pub fn run(args: TxArgs) -> Result<()> {
+    match args.command {
+        TxCommand::Send {
+            data_dir,
+            from,
+            to,
+            amount,
+            gas_price,
+        } => send_transfer(data_dir, from, to, amount, gas_price),
+    }
+}
+
+fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
+    let key_file = keys_dir.join(format!("{}.json", name));
+    if !key_file.exists() {
+        bail!(
+            "Keypair file not found: {}. Use 'minichain account new' to create one.",
+            key_file.display()
+        );
+    }
+
+    let contents = fs::read_to_string(&key_file)?;
+    let json: serde_json::Value = serde_json::from_str(&contents)?;
+
+    let private_key_hex = json
+        .get("private_key")
+        .and_then(|v| v.as_str())
+        .context("Missing private_key in keypair file")?;
+
+    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
+
+    if private_key_bytes.len() != 32 {
+        bail!(
+            "Invalid private key length: expected 32 bytes, got {}",
+            private_key_bytes.len()
+        );
+    }
+
+    let mut private_key = [0u8; 32];
+    private_key.copy_from_slice(&private_key_bytes);
+
+    Keypair::from_private_key(&private_key).context("Failed to create keypair from private key")
+}
+
+fn send_transfer(
+    data_dir: PathBuf,
+    from_name: String,
+    to_addr: String,
+    amount: u64,
+    gas_price: u64,
+) -> Result<()> {
+    println!("{}", "Sending transfer transaction...".bold().cyan());
+    println!();
+
+    // Load keypair
+    let keys_dir = data_dir.join("keys");
+    let keypair = load_keypair(&keys_dir, &from_name)?;
+    let from = keypair.address();
+
+    // Parse recipient address
+    let to = Address::from_hex(&to_addr)
+        .with_context(|| format!("Invalid recipient address: {}", to_addr))?;
+
+    // Open storage and get nonce
+    let storage = Storage::open(&data_dir).with_context(|| "Failed to open storage")?;
+
+    let state = minichain_storage::StateManager::new(&storage);
+    let nonce = state.get_nonce(&from)?;
+    let balance = state.get_balance(&from)?;
+
+    println!("  From:     {}", from.to_hex().bright_yellow());
+    println!("  To:       {}", to.to_hex().bright_yellow());
+    println!("  Amount:   {}", amount.to_string().bright_cyan());
+    println!("  Nonce:    {}", nonce.to_string().bright_black());
+    println!("  Balance:  {}", balance.to_string().bright_black());
+    println!();
+
+    // Check balance
+    let total_cost = amount + (21_000 * gas_price);
+    if balance < total_cost {
+        bail!(
+            "Insufficient balance: have {}, need {} (amount {} + gas {})",
+            balance,
+            total_cost,
+            amount,
+            21_000 * gas_price
+        );
+    }
+
+    // Create and sign transaction
+    let tx = Transaction::transfer(from, to, amount, nonce, gas_price).signed(&keypair);
+    let tx_hash = tx.hash();
+
+    println!("{}  Transaction created", "✓".green().bold());
+    println!("    Hash: {}", tx_hash.to_hex().bright_yellow());
+    println!();
+
+    // Load config and create blockchain
+    let config = load_config(&data_dir)?;
+    let mut blockchain = Blockchain::new(&storage, config);
+
+    // Register authorities
+    register_authorities(&mut blockchain, &data_dir)?;
+
+    // Submit transaction
+    blockchain
+        .submit_transaction(tx)
+        .context("Failed to submit transaction")?;
+
+    println!("{}  Transaction submitted to mempool", "✓".green().bold());
+    println!();
+    println!("Transaction will be included in the next block.");
+    println!(
+        "Use {} to produce a block.",
+        "minichain block produce".bright_cyan()
+    );
+
+    Ok(())
+}
+
+// Helper function to load blockchain config
+fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
+    let config_file = data_dir.join("config.json");
+    let contents = fs::read_to_string(&config_file)
+        .context("Failed to read config.json. Did you run 'minichain init'?")?;
+
+    let json: serde_json::Value = serde_json::from_str(&contents)?;
+
+    let authorities: Vec<Address> = json
+        .get("authorities")
+        .and_then(|v| v.as_array())
+        .context("Missing authorities in config")?
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .and_then(|s| Address::from_hex(s).ok())
+                .context("Invalid authority address")
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let block_time = json.get("block_time").and_then(|v| v.as_u64()).unwrap_or(5);
+
+    let max_block_size = json
+        .get("max_block_size")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1000) as usize;
+
+    Ok(BlockchainConfig {
+        consensus: PoAConfig::new(authorities, block_time),
+        max_block_size,
+    })
+}
+
+// Helper function to register authorities
+fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<()> {
+    let keys_dir = data_dir.join("keys");
+
+    for entry in fs::read_dir(&keys_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.starts_with("authority_"))
+        {
+            let contents = fs::read_to_string(&path)?;
+            let json: serde_json::Value = serde_json::from_str(&contents)?;
+
+            let address_hex = json
+                .get("address")
+                .and_then(|v| v.as_str())
+                .context("Missing address in authority file")?;
+            let pubkey_hex = json
+                .get("public_key")
+                .and_then(|v| v.as_str())
+                .context("Missing public_key in authority file")?;
+
+            let address = Address::from_hex(address_hex)?;
+            let pubkey_bytes = hex::decode(pubkey_hex)?;
+
+            if pubkey_bytes.len() != 32 {
+                continue;
+            }
+
+            let mut pubkey_arr = [0u8; 32];
+            pubkey_arr.copy_from_slice(&pubkey_bytes);
+
+            // Create public key from bytes
+            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_arr)
+                .context("Invalid public key")?;
+            let public_key = minichain_core::PublicKey(verifying_key);
+
+            blockchain.register_authority(address, public_key);
+        }
+    }
+
+    Ok(())
+}

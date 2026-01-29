@@ -124,7 +124,7 @@ mod tests {
     fn test_assemble_simple() {
         let source = "LOADI R0, 10\nHALT";
         let bytecode = assemble(source).unwrap();
-        assert!(bytecode.len() > 0);
+        assert!(!bytecode.is_empty());
     }
 
     #[test]
@@ -139,7 +139,7 @@ mod tests {
                 HALT
         "#;
         let bytecode = assemble(source).unwrap();
-        assert!(bytecode.len() > 0);
+        assert!(!bytecode.is_empty());
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod tests {
         let (program, bytecode) = assemble_with_ast(source).unwrap();
 
         assert_eq!(program.entry_point, Some("main".to_string()));
-        assert!(bytecode.len() > 0);
+        assert!(!bytecode.is_empty());
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
 
         let bytecode = assemble(source).unwrap();
         // Verify it compiles without error
-        assert!(bytecode.len() > 0);
+        assert!(!bytecode.is_empty());
 
         // Check key opcodes are present
         assert_eq!(bytecode[0], 0x70); // First LOADI

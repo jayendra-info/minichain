@@ -427,7 +427,7 @@ mod tests {
         let bytecode = Compiler::compile(&program).unwrap();
 
         // Should compile without error
-        assert!(bytecode.len() > 0);
+        assert!(!bytecode.is_empty());
 
         // Check that LOADI R5, loop_end resolves to address 0x14 (20 decimal)
         // main: 0x00
@@ -461,10 +461,7 @@ mod tests {
         let program = Parser::parse(source).unwrap();
         let result = Compiler::compile(&program);
 
-        assert!(matches!(
-            result,
-            Err(CompileError::DuplicateLabel { .. })
-        ));
+        assert!(matches!(result, Err(CompileError::DuplicateLabel { .. })));
     }
 
     #[test]
@@ -496,6 +493,6 @@ mod tests {
         let bytecode = Compiler::compile(&program).unwrap();
 
         // Should compile successfully despite forward reference
-        assert!(bytecode.len() > 0);
+        assert!(!bytecode.is_empty());
     }
 }

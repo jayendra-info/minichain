@@ -86,7 +86,13 @@ impl Transaction {
     }
 
     /// Create a contract deployment transaction.
-    pub fn deploy(from: Address, bytecode: Vec<u8>, nonce: u64, gas_limit: u64, gas_price: u64) -> Self {
+    pub fn deploy(
+        from: Address,
+        bytecode: Vec<u8>,
+        nonce: u64,
+        gas_limit: u64,
+        gas_price: u64,
+    ) -> Self {
         Self::new(nonce, from, None, 0, bytecode, gas_limit, gas_price)
     }
 
@@ -161,7 +167,8 @@ impl Transaction {
 
     /// Calculate the maximum cost of this transaction.
     pub fn max_cost(&self) -> u64 {
-        self.value.saturating_add(self.gas_limit.saturating_mul(self.gas_price))
+        self.value
+            .saturating_add(self.gas_limit.saturating_mul(self.gas_price))
     }
 
     /// Calculate the contract address for a deployment transaction.

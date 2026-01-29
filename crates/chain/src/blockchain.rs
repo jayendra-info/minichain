@@ -4,7 +4,9 @@
 
 use crate::executor::{BlockExecutionResult, Executor};
 use crate::mempool::Mempool;
-use minichain_consensus::{Authority, BlockProposer, BlockValidator, PoAConfig, TransactionValidator};
+use minichain_consensus::{
+    Authority, BlockProposer, BlockValidator, PoAConfig, TransactionValidator,
+};
 use minichain_core::{Address, Block, Hash, Transaction};
 use minichain_storage::{ChainStore, StateManager, Storage};
 use thiserror::Error;
@@ -122,11 +124,7 @@ impl<'a> Blockchain<'a> {
     }
 
     /// Register a public key for an authority.
-    pub fn register_authority(
-        &mut self,
-        address: Address,
-        public_key: minichain_core::PublicKey,
-    ) {
+    pub fn register_authority(&mut self, address: Address, public_key: minichain_core::PublicKey) {
         self.authority.register_public_key(address, public_key);
     }
 
@@ -154,9 +152,7 @@ impl<'a> Blockchain<'a> {
         let new_height = parent.header.height + 1;
 
         // Select transactions from mempool
-        let transactions = self
-            .mempool
-            .get_pending(self.config.max_block_size);
+        let transactions = self.mempool.get_pending(self.config.max_block_size);
 
         // Create block (proposer checks if it's their turn)
         let block = proposer.propose_block(

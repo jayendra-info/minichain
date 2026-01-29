@@ -13,31 +13,33 @@ mod tx;
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Initialize a new chain
-    Init,
-    /// Account management
-    Account,
+    /// Initialize a new blockchain
+    Init(init::InitArgs),
+    /// Account management (create keypairs, check balances)
+    Account(account::AccountArgs),
     /// Transaction operations
-    Tx,
+    Tx(tx::TxArgs),
     /// Block operations
-    Block,
+    Block(block::BlockArgs),
     /// Deploy a contract
-    Deploy,
+    Deploy(deploy::DeployArgs),
     /// Call a contract
-    Call,
+    Call(call::CallArgs),
     /// Block explorer
     Explore,
 }
 
 pub fn run(cmd: Commands) -> Result<()> {
     match cmd {
-        Commands::Init => println!("init: not yet implemented"),
-        Commands::Account => println!("account: not yet implemented"),
-        Commands::Tx => println!("tx: not yet implemented"),
-        Commands::Block => println!("block: not yet implemented"),
-        Commands::Deploy => println!("deploy: not yet implemented"),
-        Commands::Call => println!("call: not yet implemented"),
-        Commands::Explore => println!("explore: not yet implemented"),
+        Commands::Init(args) => init::run(args),
+        Commands::Account(args) => account::run(args),
+        Commands::Tx(args) => tx::run(args),
+        Commands::Block(args) => block::run(args),
+        Commands::Deploy(args) => deploy::run(args),
+        Commands::Call(args) => call::run(args),
+        Commands::Explore => {
+            println!("explore: not yet implemented");
+            Ok(())
+        }
     }
-    Ok(())
 }

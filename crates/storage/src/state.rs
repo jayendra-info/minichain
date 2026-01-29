@@ -282,7 +282,10 @@ mod tests {
 
         // Insufficient balance
         let result = state.sub_balance(&address, 2000);
-        assert!(matches!(result, Err(StorageError::InsufficientBalance { .. })));
+        assert!(matches!(
+            result,
+            Err(StorageError::InsufficientBalance { .. })
+        ));
     }
 
     #[test]

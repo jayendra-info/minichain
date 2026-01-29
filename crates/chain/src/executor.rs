@@ -140,7 +140,10 @@ impl<'a> Executor<'a> {
     }
 
     /// Execute a transfer transaction.
-    fn execute_transfer(&self, tx: &Transaction) -> Result<(bool, u64, Option<Address>, Option<String>)> {
+    fn execute_transfer(
+        &self,
+        tx: &Transaction,
+    ) -> Result<(bool, u64, Option<Address>, Option<String>)> {
         let to = tx.to.expect("transfer must have recipient");
 
         // Transfer value
@@ -153,9 +156,14 @@ impl<'a> Executor<'a> {
     }
 
     /// Execute a contract deployment transaction.
-    fn execute_deploy(&self, tx: &Transaction) -> Result<(bool, u64, Option<Address>, Option<String>)> {
+    fn execute_deploy(
+        &self,
+        tx: &Transaction,
+    ) -> Result<(bool, u64, Option<Address>, Option<String>)> {
         // Calculate contract address
-        let contract_addr = tx.contract_address().expect("deploy must calculate address");
+        let contract_addr = tx
+            .contract_address()
+            .expect("deploy must calculate address");
 
         // Calculate code hash
         let code_hash = minichain_core::hash(&tx.data);
@@ -180,7 +188,10 @@ impl<'a> Executor<'a> {
     }
 
     /// Execute a contract call transaction.
-    fn execute_call(&self, tx: &Transaction) -> Result<(bool, u64, Option<Address>, Option<String>)> {
+    fn execute_call(
+        &self,
+        tx: &Transaction,
+    ) -> Result<(bool, u64, Option<Address>, Option<String>)> {
         let contract_addr = tx.to.expect("call must have recipient");
 
         // Get contract account
@@ -256,7 +267,9 @@ mod tests {
 
         // Setup sender with balance
         state.set_balance(&from, 100_000).unwrap();
-        state.put_account(&from, &Account::new_user(100_000)).unwrap();
+        state
+            .put_account(&from, &Account::new_user(100_000))
+            .unwrap();
 
         let tx = Transaction::transfer(from, to, 1000, 0, 1).signed(&keypair);
 
@@ -290,7 +303,9 @@ mod tests {
 
         // Setup sender with balance
         state.set_balance(&from, 1_000_000).unwrap();
-        state.put_account(&from, &Account::new_user(1_000_000)).unwrap();
+        state
+            .put_account(&from, &Account::new_user(1_000_000))
+            .unwrap();
 
         let tx = Transaction::deploy(from, bytecode.clone(), 0, 100_000, 1).signed(&keypair);
 
@@ -366,19 +381,17 @@ mod tests {
         let addr2 = keypair2.address();
 
         // Setup accounts
-        state.put_account(&addr1, &Account::new_user(100_000)).unwrap();
-        state.put_account(&addr2, &Account::new_user(100_000)).unwrap();
+        state
+            .put_account(&addr1, &Account::new_user(100_000))
+            .unwrap();
+        state
+            .put_account(&addr2, &Account::new_user(100_000))
+            .unwrap();
 
         let tx1 = Transaction::transfer(addr1, addr2, 1000, 0, 1).signed(&keypair1);
         let tx2 = Transaction::transfer(addr2, addr1, 500, 0, 1).signed(&keypair2);
 
-        let block = Block::new(
-            1,
-            Hash::ZERO,
-            vec![tx1, tx2],
-            Hash::ZERO,
-            addr1,
-        );
+        let block = Block::new(1, Hash::ZERO, vec![tx1, tx2], Hash::ZERO, addr1);
 
         let executor = Executor::new(&state);
         let result = executor.execute_block(&block).unwrap();

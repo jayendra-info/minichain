@@ -6,7 +6,7 @@ use logos::Logos;
 
 /// Token types for assembly language
 #[derive(Logos, Debug, Clone, PartialEq)]
-#[logos(skip r"[ \t\r\n]+")]  // Skip whitespace
+#[logos(skip r"[ \t\r\n]+")] // Skip whitespace
 pub enum Token {
     // ========== Control Flow Instructions ==========
     #[token("HALT", ignore(ascii_case))]
@@ -263,12 +263,15 @@ mod tests {
         let source = "LOADI R0, 10";
         let tokens: Vec<_> = Lexer::new(source).map(|(t, _)| t).collect();
 
-        assert_eq!(tokens, vec![
-            Token::LoadI,
-            Token::Register(0),
-            Token::Comma,
-            Token::Number(10),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LoadI,
+                Token::Register(0),
+                Token::Comma,
+                Token::Number(10),
+            ]
+        );
     }
 
     #[test]
@@ -276,16 +279,19 @@ mod tests {
         let source = "loop_start:\n    ADD R2, R0, R1";
         let tokens: Vec<_> = Lexer::new(source).map(|(t, _)| t).collect();
 
-        assert_eq!(tokens, vec![
-            Token::Identifier("loop_start".to_string()),
-            Token::Colon,
-            Token::Add,
-            Token::Register(2),
-            Token::Comma,
-            Token::Register(0),
-            Token::Comma,
-            Token::Register(1),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("loop_start".to_string()),
+                Token::Colon,
+                Token::Add,
+                Token::Register(2),
+                Token::Comma,
+                Token::Register(0),
+                Token::Comma,
+                Token::Register(1),
+            ]
+        );
     }
 
     #[test]
@@ -293,12 +299,15 @@ mod tests {
         let source = "LOADI R0, 0xFF";
         let tokens: Vec<_> = Lexer::new(source).map(|(t, _)| t).collect();
 
-        assert_eq!(tokens, vec![
-            Token::LoadI,
-            Token::Register(0),
-            Token::Comma,
-            Token::HexNumber(255),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LoadI,
+                Token::Register(0),
+                Token::Comma,
+                Token::HexNumber(255),
+            ]
+        );
     }
 
     #[test]
@@ -306,14 +315,17 @@ mod tests {
         let source = "ADD R0, R1, R2  ; increment counter";
         let tokens: Vec<_> = Lexer::new(source).map(|(t, _)| t).collect();
 
-        assert_eq!(tokens, vec![
-            Token::Add,
-            Token::Register(0),
-            Token::Comma,
-            Token::Register(1),
-            Token::Comma,
-            Token::Register(2),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Add,
+                Token::Register(0),
+                Token::Comma,
+                Token::Register(1),
+                Token::Comma,
+                Token::Register(2),
+            ]
+        );
     }
 
     #[test]
@@ -321,10 +333,13 @@ mod tests {
         let source = ".entry main";
         let tokens: Vec<_> = Lexer::new(source).map(|(t, _)| t).collect();
 
-        assert_eq!(tokens, vec![
-            Token::Directive("entry".to_string()),
-            Token::Identifier("main".to_string()),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Directive("entry".to_string()),
+                Token::Identifier("main".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -340,10 +355,7 @@ mod tests {
         let source = "R0 R15";
         let tokens: Vec<_> = Lexer::new(source).map(|(t, _)| t).collect();
 
-        assert_eq!(tokens, vec![
-            Token::Register(0),
-            Token::Register(15),
-        ]);
+        assert_eq!(tokens, vec![Token::Register(0), Token::Register(15),]);
 
         // R16 is out of range and will be parsed as identifier
         let source2 = "R16";

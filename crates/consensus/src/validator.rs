@@ -57,7 +57,6 @@ impl TransactionValidator {
     /// the public key which must be obtained from the blockchain state.
     /// Use `validate_with_signature` for full validation including signature.
     pub fn validate_transaction(tx: &Transaction) -> Result<()> {
-
         // Check gas price
         if tx.gas_price == 0 {
             return Err(ValidationError::ZeroGasPrice);
@@ -368,7 +367,13 @@ mod tests {
         let tx = Transaction::transfer(from, to, 1000, 0, 1).signed(&keypair);
 
         // Create block with duplicate transaction
-        let block = Block::new(1, Hash::ZERO, vec![tx.clone(), tx.clone()], Hash::ZERO, from);
+        let block = Block::new(
+            1,
+            Hash::ZERO,
+            vec![tx.clone(), tx.clone()],
+            Hash::ZERO,
+            from,
+        );
 
         assert!(matches!(
             BlockValidator::validate_block_structure(&block),

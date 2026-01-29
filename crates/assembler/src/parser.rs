@@ -179,7 +179,7 @@ impl Instruction {
 pub struct Parser<'source> {
     tokens: Vec<(Token, usize)>,
     position: usize,
-    source: &'source str,
+    _source: &'source str,
 }
 
 impl<'source> Parser<'source> {
@@ -189,7 +189,7 @@ impl<'source> Parser<'source> {
         Self {
             tokens,
             position: 0,
-            source,
+            _source: source,
         }
     }
 
@@ -411,9 +411,11 @@ impl<'source> Parser<'source> {
             Token::Gt => self.parse_three_reg(|d, s1, s2| Instruction::Gt { dst: d, s1, s2 }),
             Token::Le => self.parse_three_reg(|d, s1, s2| Instruction::Le { dst: d, s1, s2 }),
             Token::Ge => self.parse_three_reg(|d, s1, s2| Instruction::Ge { dst: d, s1, s2 }),
-            Token::MCopy => {
-                self.parse_three_reg(|d, s, l| Instruction::MCopy { dst: d, src: s, len: l })
-            }
+            Token::MCopy => self.parse_three_reg(|d, s, l| Instruction::MCopy {
+                dst: d,
+                src: s,
+                len: l,
+            }),
 
             // Register + immediate
             Token::LoadI => {

@@ -19,7 +19,7 @@ pub fn merkle_root(hashes: &[Hash]) -> Hash {
     let mut current_level: Vec<Hash> = hashes.to_vec();
 
     while current_level.len() > 1 {
-        let mut next_level = Vec::with_capacity((current_level.len() + 1) / 2);
+        let mut next_level = Vec::with_capacity(current_level.len().div_ceil(2));
 
         for chunk in current_level.chunks(2) {
             let combined = if chunk.len() == 2 {
@@ -68,7 +68,7 @@ impl MerkleTree {
 
         while levels.last().unwrap().len() > 1 {
             let current = levels.last().unwrap();
-            let mut next = Vec::with_capacity((current.len() + 1) / 2);
+            let mut next = Vec::with_capacity(current.len().div_ceil(2));
 
             for chunk in current.chunks(2) {
                 let combined = if chunk.len() == 2 {
@@ -107,8 +107,12 @@ impl MerkleTree {
         let mut idx = index;
 
         for level in &self.levels[..self.levels.len() - 1] {
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
-            let is_right = idx % 2 == 0;
+            let sibling_idx = if idx.is_multiple_of(2) {
+                idx + 1
+            } else {
+                idx - 1
+            };
+            let is_right = idx.is_multiple_of(2);
 
             let sibling = if sibling_idx < level.len() {
                 level[sibling_idx]
