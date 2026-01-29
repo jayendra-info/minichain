@@ -1,0 +1,1223 @@
+---
+title: "Chapter 5: Blockchain Orchestration & Consensus"
+description: Bringing everything together with PoA consensus and chain management
+---
+
+import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+In [Chapter 4](/part4/chapter4-assembler), we built an assembler that compiles human-readable assembly into bytecode. Now we have all the building blocks:
+
+- **Core primitives** ([Chapter 1](/part1/chapter1-core)) — Transactions, blocks, addresses, signatures
+- **Persistent storage** ([Chapter 2](/part2/chapter2-storage)) — State and block storage with sled
+- **Virtual machine** ([Chapter 3](/part3/chapter3-vm)) — Executes contract bytecode
+- **Assembler** ([Chapter 4](/part4/chapter4-assembler)) — Compiles assembly to bytecode
+
+But these components are isolated. A transaction sits in memory. A VM can execute bytecode, but who loads it? Storage can persist state, but who updates it? The **blockchain orchestration layer** is the conductor that brings all instruments together to play the symphony.
+
+This chapter implements the **blockchain itself** — the data structure and logic that:
+- Accepts transactions from users
+- Validates and orders them
+- Executes them in the VM
+- Updates persistent state
+- Produces new blocks
+- Enforces consensus rules
+
+## What We're Building
+
+By the end of this chapter, you'll have implemented:
+
+| Module | Purpose |
+|--------|---------|
+| **Consensus** |  |
+| `poa.rs` | Proof of Authority - authority management and block signing |
+| `validator.rs` | Block and transaction validation rules |
+| **Chain Orchestration** |  |
+| `mempool.rs` | Transaction pool for pending transactions |
+| `executor.rs` | Block execution engine (runs transactions in VM) |
+| `blockchain.rs` | Main blockchain struct - ties everything together |
+
+---
+
+## Why Blockchain Orchestration?
+
+### The Problem: Disconnected Components
+
+Imagine you have:
+- A car engine (VM)
+- A fuel tank (storage)
+- A steering wheel (transactions)
+- A dashboard (state)
+
+But no chassis, no wiring, no control system. The engine can't access fuel. The steering wheel isn't connected to the wheels. The dashboard doesn't show actual data.
+
+**That's our blockchain without orchestration.** Each component works in isolation.
+
+### The Solution: The Blockchain Layer
+
+The blockchain layer is the **chassis and control system** that:
+
+```
+User submits transaction
+        ↓
+   Mempool (queue)
+        ↓
+   Validator (check rules)
+        ↓
+    Block Producer (authority creates block)
+        ↓
+   Executor (run transactions in VM)
+        ↓
+    Storage (persist new state)
+        ↓
+   New block added to chain
+```
+
+<Aside type="tip" title="Orchestra Analogy">
+Think of the blockchain as a **conductor** leading an orchestra:
+
+| Orchestra | Blockchain |
+|-----------|------------|
+| **Conductor** | Blockchain orchestration layer |
+| **Sheet music** | Transactions (instructions to execute) |
+| **Musicians** | Components (VM, storage, validators) |
+| **Performance** | Block execution |
+| **Recording** | Persistent state |
+
+The conductor doesn't play instruments (doesn't execute transactions). It coordinates *when* each musician plays (when each component acts), ensuring harmony (consensus and consistency).
+</Aside>
+
+---
+
+## 5.1 Consensus: Proof of Authority
+
+Before we build the chain logic, we need to understand **consensus** — how nodes agree on which blocks are valid.
+
+### What is Consensus?
+
+In a distributed system where multiple independent nodes maintain copies of the blockchain, we face a **coordination problem**: how do separate computers agree on the same history when they can't fully trust each other?
+
+Without a coordination mechanism:
+- Different nodes might accept different transactions in different orders
+- Multiple nodes might produce competing blocks simultaneously
+- The chain would fork into incompatible histories
+- No single authoritative version of state would exist
+
+**Consensus** is the solution: a set of rules that all nodes follow to coordinate their actions and converge on a single shared history, even when they operate independently.
+
+| Consensus Type | How Blocks Are Produced | Examples |
+|----------------|-------------------------|----------|
+| **Proof of Work (PoW)** | Miners solve computational puzzles | Bitcoin, early Ethereum |
+| **Proof of Stake (PoS)** | Validators stake tokens to propose blocks | Ethereum (post-merge), Cardano |
+| **Proof of Authority (PoA)** | Pre-approved authorities take turns | Private chains, testnets, **minichain** |
+
+### Why Proof of Authority?
+
+For a learning blockchain, PoA is ideal:
+
+| Reason | Explanation |
+|--------|-------------|
+| **Simplicity** | No mining, no staking — just signatures |
+| **Determinism** | Known authorities = predictable behavior |
+| **Fast** | No waiting for mining or staking rounds |
+| **Educational** | Focus on blockchain mechanics, not consensus complexity |
+
+<Aside type="note">
+**Production use:** PoA is used in private/permissioned blockchains where participants are known and trusted (e.g., corporate supply chains, regulatory compliance systems). For public blockchains, PoW or PoS are preferred because they're permissionless.
+</Aside>
+
+### How PoA Works
+
+1. **Setup:** A set of **authorities** (addresses) are designated as block producers
+2. **Block Production:** Only authorities can sign and produce blocks
+3. **Validation:** Nodes verify that blocks are signed by valid authorities
+4. **Finality:** Once a block is produced, it's considered final (no forks)
+
+**For minichain, we'll use single-authority PoA:** One designated address produces all blocks. This is the simplest form — perfect for learning.
+
+---
+
+## 5.2 Authority Management
+
+Let's define what an authority is and how to manage them.
+
+### Authority Structure
+
+```rust
+use minichain_core::Address;
+
+/// Authority configuration for PoA consensus
+#[derive(Debug, Clone, PartialEq)]
+pub struct Authority {
+    /// The authority's address (derived from their public key)
+    pub address: Address,
+    /// Human-readable name (optional)
+    pub name: Option<String>,
+}
+
+impl Authority {
+    pub fn new(address: Address) -> Self {
+        Self {
+            address,
+            name: None,
+        }
+    }
+
+    pub fn with_name(address: Address, name: impl Into<String>) -> Self {
+        Self {
+            address,
+            name: Some(name.into()),
+        }
+    }
+}
+```
+
+### Authority Set
+
+For single-authority PoA, our "set" contains one authority:
+
+```rust
+/// Proof of Authority consensus configuration
+#[derive(Debug, Clone)]
+pub struct PoAConfig {
+    /// Single authority for this chain
+    pub authority: Authority,
+}
+
+impl PoAConfig {
+    pub fn new(authority_address: Address) -> Self {
+        Self {
+            authority: Authority::new(authority_address),
+        }
+    }
+
+    /// Check if an address is the authority
+    pub fn is_authority(&self, address: &Address) -> bool {
+        &self.authority.address == address
+    }
+}
+```
+
+<Aside type="tip" title="Extending to Multiple Authorities">
+For production PoA with rotating authorities, you'd:
+1. Store a `Vec<Authority>` instead of a single authority
+2. Implement a **round-robin** or **stake-weighted** selection algorithm
+3. Add timing rules (e.g., each authority gets 5-second slots)
+4. Handle missed turns (authority offline → next authority produces)
+
+We keep it single-authority for simplicity.
+</Aside>
+
+---
+
+## 5.3 Transaction Lifecycle
+
+Let's trace a transaction from submission to execution.
+
+### The Journey of a Transaction
+
+```
+1. User creates & signs transaction
+          ↓
+2. Submit to node (RPC or P2P)
+          ↓
+3. Validation (signature, nonce, balance)
+          ↓
+4. Add to mempool (pending queue)
+          ↓
+5. Authority selects transactions for block
+          ↓
+6. Transactions executed in VM
+          ↓
+7. State updates persisted
+          ↓
+8. Block finalized and broadcast
+```
+
+### Transaction States
+
+| State | Meaning | Location |
+|-------|---------|----------|
+| **Pending** | Submitted but not yet in a block | Mempool |
+| **Included** | In a block but block not yet executed | Block body |
+| **Executed** | Ran in VM, state updated | Storage (receipt) |
+| **Failed** | Execution reverted (e.g., out of gas) | Storage (failed receipt) |
+
+<Aside type="note" title="Banking Analogy">
+Transaction states are like check processing:
+
+- **Pending** = Check written but not deposited
+- **Included** = Check deposited, waiting to clear
+- **Executed** = Check cleared, funds transferred
+- **Failed** = Check bounced (insufficient funds)
+</Aside>
+
+---
+
+## 5.4 The Mempool
+
+The **mempool** (memory pool) is a temporary holding area for transactions awaiting inclusion in a block.
+
+### Why a Mempool?
+
+Without a mempool:
+- Transactions would be processed immediately in the order received
+- No batching → one transaction per block (inefficient)
+- No opportunity to reorder by priority (gas price)
+
+With a mempool:
+- **Batching**: Multiple transactions per block
+- **Ordering**: Prioritize by gas price or arrival time
+- **Deduplication**: Reject duplicate transactions
+- **Buffering**: Handle bursts of transaction submissions
+
+### Mempool Structure
+
+```rust
+use std::collections::{HashMap, VecDeque};
+use minichain_core::{Transaction, Hash};
+
+/// Transaction pool for pending transactions
+#[derive(Debug)]
+pub struct Mempool {
+    /// Transactions by hash (for fast lookup)
+    transactions: HashMap<Hash, Transaction>,
+    /// Ordered queue (FIFO for simplicity)
+    queue: VecDeque<Hash>,
+    /// Maximum number of transactions in mempool
+    max_size: usize,
+}
+
+impl Mempool {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            transactions: HashMap::new(),
+            queue: VecDeque::new(),
+            max_size,
+        }
+    }
+
+    /// Add a transaction to the mempool
+    pub fn add(&mut self, tx: Transaction) -> Result<(), MempoolError> {
+        let hash = tx.hash();
+
+        // Check if already in mempool
+        if self.transactions.contains_key(&hash) {
+            return Err(MempoolError::DuplicateTransaction(hash));
+        }
+
+        // Check capacity
+        if self.transactions.len() >= self.max_size {
+            return Err(MempoolError::Full);
+        }
+
+        // Add to pool
+        self.transactions.insert(hash, tx);
+        self.queue.push_back(hash);
+
+        Ok(())
+    }
+
+    /// Remove a transaction from the mempool
+    pub fn remove(&mut self, hash: &Hash) -> Option<Transaction> {
+        self.queue.retain(|h| h != hash);
+        self.transactions.remove(hash)
+    }
+
+    /// Get the next N transactions (for block production)
+    pub fn take(&mut self, count: usize) -> Vec<Transaction> {
+        let mut result = Vec::new();
+
+        for _ in 0..count {
+            if let Some(hash) = self.queue.pop_front() {
+                if let Some(tx) = self.transactions.remove(&hash) {
+                    result.push(tx);
+                }
+            } else {
+                break;
+            }
+        }
+
+        result
+    }
+
+    /// Get current mempool size
+    pub fn len(&self) -> usize {
+        self.transactions.len()
+    }
+
+    /// Check if mempool is empty
+    pub fn is_empty(&self) -> bool {
+        self.transactions.is_empty()
+    }
+}
+```
+
+<Aside type="tip" title="Production Mempool Features">
+Real-world mempools are more sophisticated:
+
+- **Gas price ordering**: Higher gas price → higher priority
+- **Nonce gaps**: Handle transactions with future nonces
+- **Replacement**: Replace pending tx with higher gas price
+- **Expiration**: Remove stale transactions after timeout
+- **Account limits**: Max N transactions per account
+
+For learning, FIFO (first-in, first-out) is sufficient.
+</Aside>
+
+---
+
+## 5.5 Transaction Validation
+
+Before adding a transaction to the mempool or block, we must validate it.
+
+### Validation Rules
+
+| Rule | Check | Why |
+|------|-------|-----|
+| **Signature** | Transaction signed by `from` address | Prevent impersonation |
+| **Nonce** | Matches expected nonce for sender | Prevent replay attacks |
+| **Balance** | Sender has `value + gas_limit * gas_price` | Prevent overdraft |
+| **Gas limit** | Within reasonable bounds | Prevent DoS attacks |
+| **Valid transaction type** | Deploy, Call, or Transfer | Prevent malformed data |
+
+### Validation Implementation
+
+```rust
+use minichain_core::{Transaction, Address};
+use minichain_storage::StateManager;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ValidationError {
+    #[error("Invalid signature")]
+    InvalidSignature,
+
+    #[error("Nonce mismatch: expected {expected}, got {actual}")]
+    NonceMismatch { expected: u64, actual: u64 },
+
+    #[error("Insufficient balance: required {required}, available {available}")]
+    InsufficientBalance { required: u64, available: u64 },
+
+    #[error("Gas limit too high: {0}")]
+    GasLimitTooHigh(u64),
+
+    #[error("Invalid transaction type")]
+    InvalidType,
+}
+
+pub type Result<T> = std::result::Result<T, ValidationError>;
+
+/// Transaction validator
+pub struct Validator<'a> {
+    state: &'a StateManager<'a>,
+}
+
+impl<'a> Validator<'a> {
+    pub fn new(state: &'a StateManager<'a>) -> Self {
+        Self { state }
+    }
+
+    /// Validate a transaction
+    pub fn validate(&self, tx: &Transaction) -> Result<()> {
+        // 1. Verify signature
+        if !tx.verify_signature() {
+            return Err(ValidationError::InvalidSignature);
+        }
+
+        // 2. Check nonce
+        let account = self.state.get_account(&tx.from)?;
+        if tx.nonce != account.nonce {
+            return Err(ValidationError::NonceMismatch {
+                expected: account.nonce,
+                actual: tx.nonce,
+            });
+        }
+
+        // 3. Check balance (value + max gas cost)
+        let max_cost = tx.value + (tx.gas_limit * tx.gas_price);
+        if account.balance < max_cost {
+            return Err(ValidationError::InsufficientBalance {
+                required: max_cost,
+                available: account.balance,
+            });
+        }
+
+        // 4. Check gas limit (prevent absurdly high limits)
+        const MAX_GAS_LIMIT: u64 = 10_000_000;
+        if tx.gas_limit > MAX_GAS_LIMIT {
+            return Err(ValidationError::GasLimitTooHigh(tx.gas_limit));
+        }
+
+        Ok(())
+    }
+}
+```
+
+<Aside type="caution" title="Race Conditions">
+Validation checks state at a point in time. Between validation and execution:
+- Another transaction might change the sender's balance
+- The nonce might increment (if another tx executes first)
+
+This is why we **re-validate** at execution time. The mempool validation is a preliminary filter; execution validation is authoritative.
+</Aside>
+
+---
+
+## 5.6 Block Execution
+
+The **executor** processes all transactions in a block and updates state.
+
+### Execution Flow
+
+```
+For each transaction in block:
+    1. Deduct gas cost from sender balance
+    2. If type == Deploy:
+           - Deploy contract to new address
+           - Run initialization code in VM
+    3. If type == Call:
+           - Load contract bytecode
+           - Run code in VM with transaction data
+    4. If type == Transfer:
+           - Transfer value from sender to recipient
+    5. Refund unused gas
+    6. Update sender nonce
+    7. Persist state changes
+
+After all transactions:
+    8. Compute new state root
+    9. Verify block state_root matches computed root
+```
+
+### Executor Structure
+
+```rust
+use minichain_core::{Block, Transaction, TransactionReceipt};
+use minichain_storage::{Storage, StateManager};
+use minichain_vm::Vm;
+
+/// Block executor
+pub struct Executor<'a> {
+    storage: &'a Storage,
+}
+
+impl<'a> Executor<'a> {
+    pub fn new(storage: &'a Storage) -> Self {
+        Self { storage }
+    }
+
+    /// Execute a block
+    pub fn execute_block(&self, block: &Block) -> Result<Vec<TransactionReceipt>, ExecutorError> {
+        let state = StateManager::new(self.storage);
+        let mut receipts = Vec::new();
+
+        for tx in &block.body.transactions {
+            let receipt = self.execute_transaction(&state, tx)?;
+            receipts.push(receipt);
+        }
+
+        // Compute state root
+        let computed_root = state.compute_state_root()?;
+        if computed_root != block.header.state_root {
+            return Err(ExecutorError::StateRootMismatch {
+                expected: block.header.state_root,
+                actual: computed_root,
+            });
+        }
+
+        Ok(receipts)
+    }
+
+    /// Execute a single transaction
+    fn execute_transaction(
+        &self,
+        state: &StateManager,
+        tx: &Transaction,
+    ) -> Result<TransactionReceipt, ExecutorError> {
+        // Re-validate (state may have changed since mempool)
+        Validator::new(state).validate(tx)?;
+
+        // Deduct upfront gas cost
+        let max_gas_cost = tx.gas_limit * tx.gas_price;
+        state.sub_balance(&tx.from, tx.value + max_gas_cost)?;
+
+        // Execute based on type
+        let gas_used = match &tx.transaction_type {
+            TransactionType::Deploy { bytecode, .. } => {
+                self.execute_deploy(state, tx, bytecode)?
+            }
+            TransactionType::Call { to, data } => {
+                self.execute_call(state, tx, to, data)?
+            }
+            TransactionType::Transfer { to } => {
+                self.execute_transfer(state, tx, to)?
+            }
+        };
+
+        // Refund unused gas
+        let gas_refund = (tx.gas_limit - gas_used) * tx.gas_price;
+        state.add_balance(&tx.from, gas_refund)?;
+
+        // Increment nonce
+        state.increment_nonce(&tx.from)?;
+
+        Ok(TransactionReceipt {
+            transaction_hash: tx.hash(),
+            gas_used,
+            success: true,
+        })
+    }
+
+    fn execute_deploy(
+        &self,
+        state: &StateManager,
+        tx: &Transaction,
+        bytecode: &[u8],
+    ) -> Result<u64, ExecutorError> {
+        // Compute contract address (simplified: hash of sender + nonce)
+        let contract_addr = compute_contract_address(&tx.from, tx.nonce);
+
+        // Deploy contract
+        state.deploy_contract(&contract_addr, bytecode, tx.value)?;
+
+        // Run constructor (if any initialization code exists)
+        // For now, just return minimal gas cost
+        Ok(21000) // Base transaction cost
+    }
+
+    fn execute_call(
+        &self,
+        state: &StateManager,
+        tx: &Transaction,
+        to: &Address,
+        data: &[u8],
+    ) -> Result<u64, ExecutorError> {
+        // Load contract bytecode
+        let account = state.get_account(to)?;
+        let code_hash = account
+            .code_hash
+            .ok_or(ExecutorError::NotAContract(*to))?;
+        let bytecode = state
+            .get_code(&code_hash)?
+            .ok_or(ExecutorError::CodeNotFound(code_hash))?;
+
+        // Create VM and execute
+        let mut vm = Vm::new(
+            bytecode,
+            tx.gas_limit,
+            tx.from,
+            *to,
+            tx.value,
+        );
+
+        let result = vm.run()?;
+
+        Ok(result.gas_used)
+    }
+
+    fn execute_transfer(
+        &self,
+        state: &StateManager,
+        tx: &Transaction,
+        to: &Address,
+    ) -> Result<u64, ExecutorError> {
+        // Simple value transfer
+        state.add_balance(to, tx.value)?;
+
+        Ok(21000) // Base transaction cost
+    }
+}
+```
+
+<Aside type="tip" title="Contract Address Computation">
+The contract address is typically computed as:
+```
+address = hash(sender_address || nonce)
+```
+
+This ensures:
+- Each deployment gets a unique address
+- The same sender can deploy multiple contracts
+- The address is deterministic (same inputs → same address)
+
+Ethereum uses `hash(RLP(sender, nonce))` with Keccak-256.
+</Aside>
+
+---
+
+## 5.7 State Transitions
+
+A **state transition** is the atomic transformation from one global state to another via block execution.
+
+### State Transition Function
+
+In formal terms, a blockchain implements a **state machine**:
+
+```
+STF: (State, Block) → State'
+```
+
+Where:
+- `State` = current world state (all account balances, storage, etc.)
+- `Block` = batch of transactions
+- `State'` = new world state after executing block
+
+### Atomicity
+
+State transitions must be **atomic** (all-or-nothing):
+
+| Scenario | Behavior |
+|----------|----------|
+| All transactions succeed | Commit new state |
+| Any transaction fails | **Revert entire block** |
+| System crashes mid-block | On restart, either previous state or new state (never partial) |
+
+This is achieved through the storage layer's **batch operations** ([Chapter 2](/part2/chapter2-storage#batch-updates-with-atomic-commits)):
+
+```rust
+impl Executor {
+    pub fn execute_block(&self, block: &Block) -> Result<ExecutionResult> {
+        // Collect all state changes in memory first
+        let mut state_changes = Vec::new();
+
+        for tx in &block.body.transactions {
+            let changes = self.execute_transaction(tx)?;
+            state_changes.push(changes);
+        }
+
+        // Apply all changes atomically
+        self.storage.batch(|batch| {
+            for change in state_changes {
+                change.apply_to_batch(batch)?;
+            }
+            Ok(())
+        })?;
+
+        Ok(ExecutionResult { /* ... */ })
+    }
+}
+```
+
+<Aside type="note" title="Database Transactions">
+The term "transaction" is overloaded:
+- **Blockchain transaction**: User-signed instruction (transfer, contract call)
+- **Database transaction**: Atomic group of database operations
+
+We use database transactions to implement blockchain transaction atomicity!
+</Aside>
+
+---
+
+## 5.8 Genesis Block
+
+The **genesis block** is the first block in the chain — it bootstraps the system.
+
+### Why Genesis?
+
+Every chain needs:
+- An initial state (who has tokens? which contracts exist?)
+- A starting point (block #0)
+- Consensus parameters (who are the authorities?)
+
+The genesis block provides all of this.
+
+### Genesis Configuration
+
+```rust
+use minichain_core::{Block, BlockHeader, BlockBody, Address};
+
+/// Genesis block configuration
+#[derive(Debug, Clone)]
+pub struct GenesisConfig {
+    /// Initial authority
+    pub authority: Address,
+    /// Initial account balances
+    pub initial_balances: Vec<(Address, u64)>,
+    /// Genesis timestamp
+    pub timestamp: u64,
+}
+
+impl GenesisConfig {
+    pub fn new(authority: Address) -> Self {
+        Self {
+            authority,
+            initial_balances: Vec::new(),
+            timestamp: 0,
+        }
+    }
+
+    pub fn with_balance(mut self, address: Address, balance: u64) -> Self {
+        self.initial_balances.push((address, balance));
+        self
+    }
+
+    /// Create the genesis block
+    pub fn build(&self, storage: &Storage) -> Result<Block, GenesisError> {
+        let state = StateManager::new(storage);
+
+        // Set initial balances
+        for (address, balance) in &self.initial_balances {
+            state.set_balance(address, *balance)?;
+        }
+
+        // Compute state root
+        let state_root = state.compute_state_root()?;
+
+        // Create genesis block
+        let header = BlockHeader {
+            height: 0,
+            timestamp: self.timestamp,
+            parent_hash: Hash::ZERO,
+            state_root,
+            transactions_root: Hash::ZERO, // No transactions
+            authority: self.authority,
+            signature: None, // Genesis doesn't need signature
+        };
+
+        let body = BlockBody {
+            transactions: Vec::new(),
+        };
+
+        Ok(Block { header, body })
+    }
+}
+```
+
+### Example Genesis
+
+```rust
+use minichain_core::Keypair;
+
+// Create authority
+let authority_keypair = Keypair::generate();
+let authority_addr = authority_keypair.address();
+
+// Create initial accounts
+let alice = Keypair::generate();
+let bob = Keypair::generate();
+
+// Configure genesis
+let genesis_config = GenesisConfig::new(authority_addr)
+    .with_balance(alice.address(), 1_000_000)
+    .with_balance(bob.address(), 500_000);
+
+// Build genesis block
+let genesis = genesis_config.build(&storage)?;
+```
+
+<Aside type="tip">
+**In production:** Genesis configurations are typically JSON files that can be shared among nodes. All nodes must use the *exact same genesis config* to start on the same chain.
+
+Example genesis.json:
+```json
+{
+  "authority": "0x1234...",
+  "timestamp": 1640000000,
+  "initial_balances": {
+    "0xAlice...": 1000000,
+    "0xBob...": 500000
+  }
+}
+```
+</Aside>
+
+---
+
+## 5.9 The Blockchain Structure
+
+Now we tie everything together in the main `Blockchain` struct.
+
+### Blockchain Components
+
+```rust
+use minichain_storage::{Storage, StateManager, ChainStore};
+use minichain_consensus::PoAConfig;
+
+/// The main blockchain structure
+pub struct Blockchain {
+    /// Persistent storage
+    storage: Storage,
+    /// Consensus configuration
+    consensus: PoAConfig,
+    /// Transaction mempool
+    mempool: Mempool,
+    /// Block executor
+    executor: Executor,
+}
+
+impl Blockchain {
+    /// Create a new blockchain
+    pub fn new(storage: Storage, consensus: PoAConfig) -> Self {
+        let executor = Executor::new(&storage);
+        let mempool = Mempool::new(1000); // Max 1000 pending transactions
+
+        Self {
+            storage,
+            consensus,
+            mempool,
+            executor,
+        }
+    }
+
+    /// Initialize with genesis block
+    pub fn init_genesis(&mut self, config: &GenesisConfig) -> Result<(), BlockchainError> {
+        let chain = ChainStore::new(&self.storage);
+
+        // Check if already initialized
+        if chain.is_initialized()? {
+            return Err(BlockchainError::AlreadyInitialized);
+        }
+
+        // Build and store genesis
+        let genesis = config.build(&self.storage)?;
+        chain.put_block(&genesis)?;
+        chain.set_head(&genesis.hash(), 0)?;
+
+        Ok(())
+    }
+
+    /// Submit a transaction to the mempool
+    pub fn submit_transaction(&mut self, tx: Transaction) -> Result<Hash, BlockchainError> {
+        // Validate
+        let state = StateManager::new(&self.storage);
+        let validator = Validator::new(&state);
+        validator.validate(&tx)?;
+
+        // Add to mempool
+        let hash = tx.hash();
+        self.mempool.add(tx)?;
+
+        Ok(hash)
+    }
+
+    /// Produce a new block (authority only)
+    pub fn produce_block(&mut self, authority_keypair: &Keypair) -> Result<Block, BlockchainError> {
+        // Verify authority
+        if authority_keypair.address() != self.consensus.authority.address {
+            return Err(BlockchainError::NotAuthority);
+        }
+
+        // Get transactions from mempool
+        let transactions = self.mempool.take(100); // Max 100 tx per block
+
+        // Get current head
+        let chain = ChainStore::new(&self.storage);
+        let parent_hash = chain.get_head()?.unwrap_or(Hash::ZERO);
+        let height = chain.get_height()? + 1;
+
+        // Execute transactions and compute new state root
+        let state = StateManager::new(&self.storage);
+        let mut executed_txs = Vec::new();
+
+        for tx in transactions {
+            match self.executor.execute_transaction(&state, &tx) {
+                Ok(_receipt) => executed_txs.push(tx),
+                Err(e) => {
+                    // Log error but continue with other transactions
+                    eprintln!("Transaction failed: {:?}", e);
+                }
+            }
+        }
+
+        let state_root = state.compute_state_root()?;
+
+        // Compute transactions root (merkle root of tx hashes)
+        let tx_hashes: Vec<_> = executed_txs.iter().map(|tx| tx.hash()).collect();
+        let transactions_root = merkle_root(&tx_hashes);
+
+        // Create block header
+        let mut header = BlockHeader {
+            height,
+            timestamp: current_timestamp(),
+            parent_hash,
+            state_root,
+            transactions_root,
+            authority: authority_keypair.address(),
+            signature: None,
+        };
+
+        // Sign the block
+        let signature = authority_keypair.sign(&header.hash().0);
+        header.signature = Some(signature);
+
+        // Create block
+        let block = Block {
+            header,
+            body: BlockBody {
+                transactions: executed_txs,
+            },
+        };
+
+        // Store block
+        chain.put_block(&block)?;
+        chain.set_head(&block.hash(), height)?;
+
+        Ok(block)
+    }
+
+    /// Get current block height
+    pub fn height(&self) -> Result<u64, BlockchainError> {
+        let chain = ChainStore::new(&self.storage);
+        Ok(chain.get_height()?)
+    }
+
+    /// Get block by height
+    pub fn get_block(&self, height: u64) -> Result<Option<Block>, BlockchainError> {
+        let chain = ChainStore::new(&self.storage);
+        Ok(chain.get_block_by_height(height)?)
+    }
+
+    /// Get account balance
+    pub fn get_balance(&self, address: &Address) -> Result<u64, BlockchainError> {
+        let state = StateManager::new(&self.storage);
+        Ok(state.get_balance(address)?)
+    }
+}
+```
+
+<Aside type="tip" title="Design Pattern: Facade">
+The `Blockchain` struct is a **facade** — it provides a simple, unified interface to a complex subsystem:
+
+```
+User → Blockchain.submit_transaction()
+         ↓
+       [Validator, Mempool, Storage]
+
+User → Blockchain.produce_block()
+         ↓
+       [Mempool, Executor, VM, Storage, Consensus]
+```
+
+This encapsulates complexity and provides a clean API.
+</Aside>
+
+---
+
+## 5.10 Complete Example: Running a Blockchain
+
+Let's build a complete example that demonstrates the full lifecycle.
+
+### Example: Counter Contract
+
+```rust
+use minichain_assembler::assemble;
+use minichain_core::Keypair;
+use minichain_storage::Storage;
+use minichain_consensus::PoAConfig;
+use minichain_chain::{Blockchain, GenesisConfig};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Setup
+    let storage = Storage::open("./chain_data")?;
+    let authority = Keypair::generate();
+    let user = Keypair::generate();
+
+    // 2. Create blockchain with PoA consensus
+    let consensus = PoAConfig::new(authority.address());
+    let mut blockchain = Blockchain::new(storage, consensus);
+
+    // 3. Initialize with genesis
+    let genesis_config = GenesisConfig::new(authority.address())
+        .with_balance(user.address(), 1_000_000); // Give user 1M tokens
+
+    blockchain.init_genesis(&genesis_config)?;
+    println!("Genesis block created");
+
+    // 4. Deploy counter contract
+    let counter_asm = r#"
+        ; Counter contract
+        .entry main
+
+        main:
+            LOADI R0, 0          ; storage slot 0 = counter
+            SLOAD R1, R0         ; load current value
+            LOADI R2, 1
+            ADD R1, R1, R2       ; increment
+            SSTORE R0, R1        ; save back
+            HALT
+    "#;
+
+    let bytecode = assemble(counter_asm)?;
+
+    let deploy_tx = Transaction::deploy(
+        user.address(),
+        bytecode,
+        0, // nonce
+        100_000, // gas limit
+        1, // gas price
+    );
+
+    let signed_deploy = deploy_tx.sign(&user);
+
+    // Submit deployment transaction
+    let tx_hash = blockchain.submit_transaction(signed_deploy)?;
+    println!("Submitted deployment transaction: {}", tx_hash);
+
+    // 5. Authority produces block
+    let block = blockchain.produce_block(&authority)?;
+    println!("Block {} produced with {} transactions",
+        block.header.height,
+        block.body.transactions.len()
+    );
+
+    // 6. Call the counter contract multiple times
+    let contract_addr = compute_contract_address(&user.address(), 0);
+
+    for i in 1..=5 {
+        let call_tx = Transaction::call(
+            user.address(),
+            contract_addr,
+            vec![], // no call data needed
+            0, // value
+            i, // nonce
+            100_000,
+            1,
+        ).sign(&user);
+
+        blockchain.submit_transaction(call_tx)?;
+    }
+
+    println!("Submitted 5 call transactions");
+
+    // 7. Produce another block
+    let block2 = blockchain.produce_block(&authority)?;
+    println!("Block {} produced with {} transactions",
+        block2.header.height,
+        block2.body.transactions.len()
+    );
+
+    // 8. Query state
+    let balance = blockchain.get_balance(&user.address())?;
+    println!("User balance: {}", balance);
+
+    let height = blockchain.height()?;
+    println!("Chain height: {}", height);
+
+    Ok(())
+}
+```
+
+**Output:**
+```
+Genesis block created
+Submitted deployment transaction: 0xABCD...
+Block 1 produced with 1 transactions
+Submitted 5 call transactions
+Block 2 produced with 5 transactions
+User balance: 994200 (spent gas)
+Chain height: 2
+```
+
+---
+
+## 5.11 Advanced Topics
+
+### Block Reorganization
+
+In PoA with a single authority, reorganizations (reorgs) don't occur — blocks are final. But in multi-authority PoA or PoS:
+
+```
+Normal chain:      A → B → C → D
+Reorg occurs:      A → B → C' → D'
+                       ↑ Fork point
+```
+
+Handling reorgs requires:
+1. Detecting the fork point
+2. Reverting blocks C and D
+3. Applying C' and D'
+4. Updating mempool (re-add reverted transactions)
+
+<Aside type="note">
+**For learning:** We skip reorg handling. In production PoA with multiple authorities, you'd implement fork choice rules (longest chain, highest block number, etc.).
+</Aside>
+
+### Transaction Receipts
+
+Receipts provide proof that a transaction was executed:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct TransactionReceipt {
+    pub transaction_hash: Hash,
+    pub block_height: u64,
+    pub gas_used: u64,
+    pub success: bool,
+    pub logs: Vec<Log>, // Events emitted during execution
+}
+```
+
+Receipts are stored separately from blocks and indexed by transaction hash for fast lookup.
+
+### Light Clients
+
+A **light client** doesn't store the full blockchain. Instead, it:
+1. Stores only block headers
+2. Verifies state using Merkle proofs
+3. Trusts PoA signatures
+
+```
+Light client workflow:
+1. Download block header (300 bytes)
+2. Verify authority signature
+3. Request Merkle proof for specific account
+4. Verify proof against state_root
+5. Trust the account balance
+```
+
+---
+
+## Summary
+
+We've built the complete blockchain orchestration layer:
+
+| Component | What It Does |
+|-----------|--------------|
+| **PoA Consensus** | Authority management and block signing |
+| **Validator** | Transaction and block validation rules |
+| **Mempool** | Transaction queue and selection |
+| **Executor** | Runs transactions in VM, updates state |
+| **Blockchain** | Orchestrates all components together |
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Single-authority PoA | Simplest consensus for learning |
+| FIFO mempool | Easy to understand vs gas price ordering |
+| Synchronous execution | Clear transaction lifecycle |
+| Atomic state transitions | Consistency via database transactions |
+| No reorg handling | Single authority = no forks |
+
+### Integration Points
+
+Chapter 5 brings together all previous chapters:
+
+```
+Blockchain
+    ├─ Uses Core (Chapter 1) for Transaction, Block, Address
+    ├─ Uses Storage (Chapter 2) for StateManager, ChainStore
+    ├─ Uses VM (Chapter 3) for contract execution
+    ├─ Uses Assembler (Chapter 4) implicitly (users write assembly)
+    └─ Implements Consensus and Chain orchestration
+```
+
+---
+
+## What's Next?
+
+With a working blockchain, the next step is **networking** — connecting multiple nodes to form a distributed system. Chapter 6 would cover:
+
+- Peer-to-peer networking (libp2p or custom protocol)
+- Block gossip and synchronization
+- Transaction broadcast
+- Network topology and peer discovery
+
+But for a learning blockchain, a single-node implementation is complete and functional! You can:
+- Deploy contracts (write assembly, compile to bytecode)
+- Execute transactions (state transitions via VM)
+- Query state (balances, storage, blocks)
+- Produce blocks (PoA consensus)
+
+Congratulations! You've built a blockchain from scratch. 🎉
+
