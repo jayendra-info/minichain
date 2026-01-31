@@ -41,3 +41,11 @@ code {
 .card-link:hover .card {
 	border-color: var(--sl-color-accent);
 }
+
+/* External links styling */
+a[href^="http"]::after,
+a[href^="https://"]::after {
+	content: " ↗";
+	font-size: 0.85em;
+	opacity: 0.7;
+}

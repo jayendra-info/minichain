@@ -11,6 +11,25 @@ export default defineConfig({
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/example/minichain' },
 			],
+			head: [
+				{
+					tag: 'script',
+					attrs: {},
+					content: `
+						// Ensure all external links open in new tabs
+						document.addEventListener('DOMContentLoaded', () => {
+							const links = document.querySelectorAll('a[href^="http"], a[href^="https://"]');
+							links.forEach(link => {
+								// Skip if already has target attribute
+								if (!link.getAttribute('target')) {
+									link.setAttribute('target', '_blank');
+									link.setAttribute('rel', 'noopener noreferrer');
+								}
+							});
+						});
+					`,
+				},
+			],
 			sidebar: [
 				{
 					label: 'Introduction',
