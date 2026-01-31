@@ -77,21 +77,129 @@ ADD R2, R0, R1  ; R2 = R0 + R1 = 7
 **Pros:** Fewer instructions, easier to optimize, maps well to real CPUs
 **Cons:** Larger instruction encoding (need register numbers)
 
-### Why We Choose Register-Based
+### Why Register-Based? A Deeper Look
 
-| Factor | Stack-Based | Register-Based |
-|--------|-------------|----------------|
-| Instructions per operation | More (push/pop overhead) | Fewer |
-| Bytecode size | Smaller | Larger |
-| Optimization potential | Harder | Easier |
-| Debugging clarity | Stack is implicit | Registers are explicit |
-| CPU similarity | Less similar | More similar |
+**Historical Context:**
 
-For a learning project, register-based is more intuitive. When you see `ADD R2, R0, R1`, you know exactly what's happening. With a stack VM, you need to mentally track the stack state.
+Most VMs fall into two categories:
+
+| Architecture | Examples | Advantages | Disadvantages |
+|--------------|----------|------------|---------------|
+| **Stack-Based** | EVM, JVM (early), WebAssembly | Compact bytecode, simple to compile to | More instructions, harder to optimize |
+| **Register-Based** | Lua VM, Android ART, x86/ARM CPUs | Fewer instructions, easier to optimize | Larger bytecode (register operands) |
+
+**Stack-Based Example (EVM):**
+```
+; Compute (a + b) * c
+
+PUSH a    ; Stack: [a]
+PUSH b    ; Stack: [a, b]
+ADD       ; Stack: [a+b]
+PUSH c    ; Stack: [a+b, c]
+MUL       ; Stack: [(a+b)*c]
+
+Total: 5 instructions
+```
+
+**Register-Based Example (Minichain):**
+```
+; Compute (a + b) * c
+
+LOADI R0, a    ; R0 = a
+LOADI R1, b    ; R1 = b
+ADD R2, R0, R1 ; R2 = a + b
+LOADI R3, c    ; R3 = c
+MUL R4, R2, R3 ; R4 = (a+b) * c
+
+Total: 5 instructions (same), but clearer semantics
+```
+
+**Why Register-Based Wins for Learning:**
+
+1. **Explicit Data Flow:**
+   - Stack: "Where is the value? Top? Second from top?"
+   - Registers: "Value is in R2, explicitly named"
+
+2. **Easier to Debug:**
+```
+Stack VM trace:         Register VM trace:
+PUSH 10                 LOADI R0, 10
+PUSH 20                 LOADI R1, 20
+ADD                     ADD R2, R0, R1
+  Stack: [30]            R0=10, R1=20, R2=30 ← Clear!
+```
+
+3. **Matches Physical Hardware:**
+   - CPUs have registers (x86: RAX, RBX, etc.)
+   - Understanding register-based VMs → easier to understand real CPUs
+
+4. **Optimization Opportunities:**
+   - Register allocation is a well-studied problem
+   - Easier to implement JIT compilation
+   - Less stack manipulation overhead
+
+**Why EVM Chose Stack-Based?**
 
 <Aside type="note">
-Ethereum chose stack-based because it produces smaller bytecode (important when every byte costs gas to store on-chain). We prioritize clarity over compactness.
+Ethereum chose a stack-based VM because:
+1. **Compact bytecode** (1 byte per instruction, no register operands)
+2. **Simple to implement** (early Ethereum MVP goal)
+3. **Lower gas costs** (fewer bytes to store on-chain)
+
+But modern VMs (Lua, ART, WASM) trend toward registers for performance.
 </Aside>
+
+**Performance Comparison:**
+
+| Operation | Stack VM | Register VM | Winner |
+|-----------|----------|-------------|--------|
+| Simple ADD | 3 instructions (PUSH, PUSH, ADD) | 3 instructions (LOADI, LOADI, ADD) | Tie |
+| Complex expression | More stack juggling (DUP, SWAP) | Direct register access | Register |
+| Function calls | Stack frame management | Explicit register save | Register |
+| Debugging | Opaque stack state | Visible register state | Register |
+
+**Real-World Example:**
+
+```
+Expression: result = (a * b) + (c * d)
+
+Stack VM (EVM):
+PUSH a      ; [a]
+PUSH b      ; [a, b]
+MUL         ; [a*b]
+PUSH c      ; [a*b, c]
+PUSH d      ; [a*b, c, d]
+MUL         ; [a*b, c*d]
+ADD         ; [(a*b)+(c*d)]
+
+7 instructions, max stack depth: 3
+
+Register VM (Minichain):
+LOADI R0, a          ; R0 = a
+LOADI R1, b          ; R1 = b
+MUL R2, R0, R1       ; R2 = a * b
+LOADI R3, c          ; R3 = c
+LOADI R4, d          ; R4 = d
+MUL R5, R3, R4       ; R5 = c * d
+ADD R6, R2, R5       ; R6 = R2 + R5
+
+7 instructions, 7 registers used (R0-R6)
+```
+
+Both use same number of instructions, but register version:
+- Intermediate values (a*b, c*d) have explicit homes (R2, R5)
+- No stack depth tracking needed
+- Easier to parallelize (R2 and R5 independent)
+
+**Why 16 Registers?**
+
+| Register Count | Trade-off |
+|----------------|-----------|
+| 8 registers | Compact encoding (3 bits), but frequent spills to memory |
+| **16 registers** | **4-bit encoding (good fit in bytes), enough for most expressions** |
+| 32 registers | More flexibility, but wastes encoding space |
+
+x86-64 has 16 general-purpose registers. We match that convention.
 
 ---
 

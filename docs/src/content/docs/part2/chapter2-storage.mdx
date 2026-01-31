@@ -495,6 +495,109 @@ A contract's code might be 10KB or more. If we embedded it in the Account struct
 By storing code by hash, identical contracts share storage, and account lookups stay fast.
 </Aside>
 
+### 2.3.1 Execution Trace: State Transitions
+
+Let's trace what happens when Alice sends 100 coins to Bob:
+
+**Initial State:**
+```
+Accounts:
+├─ Alice (0xAA...):  balance=1000, nonce=5
+├─ Bob (0xBB...):    balance=500,  nonce=0
+└─ State Root:       0x7d3f...
+```
+
+**Operation 1: `state.transfer(&alice, &bob, 100)`**
+
+Step 1 - Load Alice's account:
+```rust
+let mut alice_account = state.get_account(&alice)?;
+// → Account { balance: 1000, nonce: 5 }
+```
+
+Step 2 - Subtract balance (with check):
+```rust
+if alice_account.balance < 100 {
+    return Err(StorageError::InsufficientBalance {
+        address: alice,
+        required: 100,
+        available: alice_account.balance,
+    });  // ✗ Would fail here if insufficient
+}
+alice_account.balance -= 100;
+// → Account { balance: 900, nonce: 5 }
+```
+
+Step 3 - Load Bob's account:
+```rust
+let mut bob_account = state.get_account(&bob)?;
+// → Account { balance: 500, nonce: 0 } (or default if new)
+```
+
+Step 4 - Add balance:
+```rust
+bob_account.balance += 100;
+// → Account { balance: 600, nonce: 0 }
+```
+
+Step 5 - Commit both accounts:
+```rust
+state.put_account(&alice, &alice_account)?;
+state.put_account(&bob, &bob_account)?;
+```
+
+**Final State:**
+```
+Accounts:
+├─ Alice (0xAA...):  balance=900, nonce=5  [−100]
+├─ Bob (0xBB...):    balance=600, nonce=0  [+100]
+└─ State Root:       0x9e2a...              [changed]
+```
+
+<Aside type="tip" title="Banking Analogy">
+This is like a bank teller:
+1. Check Alice's balance in the ledger
+2. Verify sufficient funds
+3. Debit Alice's account (−$100)
+4. Credit Bob's account (+$100)
+5. Update both ledger pages
+6. Recalculate the branch's total balance (state root)
+</Aside>
+
+**What Happens to Storage Keys?**
+
+When we call `put_account`, here's what actually gets written to the database:
+
+```
+Before transfer:
+  Key: "account:\xAA..." → bytes: [balance=1000, nonce=5, ...]
+  Key: "account:\xBB..." → bytes: [balance=500, nonce=0, ...]
+
+After transfer:
+  Key: "account:\xAA..." → bytes: [balance=900, nonce=5, ...]  ← Updated
+  Key: "account:\xBB..." → bytes: [balance=600, nonce=0, ...]  ← Updated
+```
+
+Each account is serialized independently. sled handles writing the updated bytes to disk, along with write-ahead logging for crash safety.
+
+**State Root Recomputation:**
+
+The state root changes because Alice's account changed:
+
+```
+Before:
+  Hash(Alice data) = 0xABCD...
+  Hash(Bob data)   = 0xEF01...
+  Merkle Root      = Hash(0xABCD... + 0xEF01... + ...) = 0x7d3f...
+
+After:
+  Hash(Alice data) = 0x1234...  ← Changed (balance decreased)
+  Hash(Bob data)   = 0x5678...  ← Changed (balance increased)
+  Merkle Root      = Hash(0x1234... + 0x5678... + ...) = 0x9e2a...  ← Different!
+```
+
+This is why every state change produces a new state root — even a single byte difference in any account cascades up the Merkle tree.
+
 ---
 
 ## 2.4 Block Storage
@@ -894,6 +997,67 @@ impl<'a> StateManager<'a> {
 
 <Aside type="caution">
 This naive implementation iterates all accounts every time. For a real blockchain with millions of accounts, you'd use an incremental structure like a **Merkle Patricia Trie** that updates in O(log n) time.
+</Aside>
+
+### State Trie Visualization
+
+How accounts are organized into a Merkle tree for the state root:
+
+```
+Accounts in Storage:
+┌─────────────────────────────────────────┐
+│ Key: "account:0xAA..."                  │
+│ Value: Account { balance: 1000, ... }  │
+├─────────────────────────────────────────┤
+│ Key: "account:0xBB..."                  │
+│ Value: Account { balance: 500, ... }   │
+├─────────────────────────────────────────┤
+│ Key: "account:0xCC..."                  │
+│ Value: Account { balance: 250, ... }   │
+└─────────────────────────────────────────┘
+
+State Trie Construction:
+                    State Root
+                        │
+        ┌───────────────┼───────────────┐
+        │                               │
+    H(A_key + A_val)              H(B,C combined)
+        │                               │
+    0xAA...                      ┌──────┴──────┐
+    balance=1000                 │             │
+                            H(B_key+B_val) H(C_key+C_val)
+                                 │             │
+                            0xBB...       0xCC...
+                            balance=500   balance=250
+
+Merkle Root Calculation:
+  1. Hash each (key, value) pair
+  2. Sort hashes (deterministic ordering)
+  3. Build binary tree bottom-up
+  4. Root hash = State Root (stored in block header)
+```
+
+**What Changes the State Root:**
+
+```
+Initial State:                    After Alice → Bob Transfer:
+    State Root: 0x7d3f...              State Root: 0x9e2a...  [changed]
+         │                                      │
+    ┌────┴────┐                            ┌────┴────┐
+    │         │                            │         │
+  Alice     Bob                          Alice     Bob
+  bal=1000  bal=500                      bal=900   bal=600
+                                          ↑         ↑
+                                        (−100)    (+100)
+
+Because Alice's account changed → her hash changed → branch hash changed → root changed
+```
+
+<Aside type="note" title="Bank Analogy">
+The state root is like a bank's **daily closing balance checksum**.
+- If any account balance changes, the checksum changes
+- Different banks (blockchain nodes) can verify they have the same account states by comparing checksums
+- Tamper-proof: changing one account's balance changes the entire checksum
 </Aside>
 
 ### Why Sort?

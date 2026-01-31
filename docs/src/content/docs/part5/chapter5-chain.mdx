@@ -643,6 +643,175 @@ This ensures:
 Ethereum uses `hash(RLP(sender, nonce))` with Keccak-256.
 </Aside>
 
+### 5.6.1 Execution Trace: Transaction Lifecycle
+
+Let's trace a complete transaction from submission to finalization:
+
+**Scenario:** Alice calls a counter contract that increments storage slot 0.
+
+**Step 1: Transaction Submission**
+```rust
+// User creates and signs transaction
+let tx = Transaction::call(
+    alice_addr,           // from
+    contract_addr,        // to
+    vec![],               // data (empty for simple call)
+    0,                    // value
+    5,                    // nonce
+    50_000,               // gas_limit
+    1,                    // gas_price
+).sign(&alice_keypair);
+
+blockchain.submit_transaction(tx)?;
+```
+
+**Mempool State:**
+```
+Mempool:
+└─ Priority Queue (by gas price):
+   └─ [Gas=1] Tx 0xAB...: Alice → Contract (nonce=5)
+```
+
+**Step 2: Validation** (in `validator.validate_transaction`)
+```
+Check 1: Signature
+  ✓ tx.verify_signature()
+
+Check 2: Nonce
+  Current nonce: 5
+  Tx nonce:      5
+  ✓ Match
+
+Check 3: Balance
+  Required: 50,000 * 1 = 50,000 (gas cost)
+  Available: 1,000,000
+  ✓ Sufficient
+
+Check 4: Target Exists
+  Contract at 0xCON...
+  ✓ Is contract (has code_hash)
+
+→ Transaction VALID, remains in mempool
+```
+
+**Step 3: Block Production**
+```rust
+authority.produce_block()?;
+```
+
+**Mempool → Block:**
+```
+Select transactions from mempool:
+  ✓ Take tx 0xAB... (Alice → Contract)
+
+Block 1 Header:
+├─ Height: 1
+├─ Prev Hash: 0x0000... (genesis)
+├─ Timestamp: 1704067200
+├─ Authority: 0xAUTH...
+└─ Transactions: [0xAB...]
+```
+
+**Step 4: Execution** (in `executor.execute_transaction`)
+
+**Before Execution:**
+```
+State:
+├─ Alice:    balance=1,000,000, nonce=5
+├─ Contract: balance=0, storage[0]=7
+└─ Gas Pool: 50,000 available
+```
+
+**VM Execution:**
+```
+Opcode Trace:
+0x00: LOADI R0, 0           gas=3    [R0 ← 0]
+0x09: SLOAD R1, R0          gas=100  [R1 ← storage[0] = 7]
+0x0C: LOADI R2, 1           gas=3    [R2 ← 1]
+0x15: ADD R1, R1, R2        gas=2    [R1 ← 7 + 1 = 8]
+0x18: SSTORE R0, R1         gas=5000 [storage[0] ← 8]
+0x1B: HALT                  gas=0    [stop]
+
+Total Gas Used: 5,108
+```
+
+**State Changes:**
+```rust
+// 1. Update contract storage
+state.sstore(&contract_addr, &[0u8; 32], &[8u8; 32])?;
+
+// 2. Increment Alice's nonce
+let old_nonce = state.increment_nonce(&alice_addr)?;  // 5 → 6
+
+// 3. Charge gas
+let gas_cost = 5_108 * 1 = 5,108;
+state.sub_balance(&alice_addr, gas_cost)?;  // 1,000,000 → 994,892
+```
+
+**After Execution:**
+```
+State:
+├─ Alice:    balance=994,892, nonce=6   [−5,108, +1 nonce]
+├─ Contract: balance=0, storage[0]=8    [storage changed]
+└─ Gas Used: 5,108 / 50,000
+```
+
+**Step 5: State Commitment**
+```rust
+// Compute new state root
+let new_state_root = state.compute_state_root()?;
+
+// Finalize block
+block.header.state_root = new_state_root;
+chain.put_block(&block)?;
+```
+
+**Final Chain State:**
+```
+Blockchain:
+├─ Block 0 (Genesis):  0 txs
+├─ Block 1:            1 tx
+│  └─ Tx 0xAB... (Alice → Contract): SUCCESS
+│     └─ Gas: 5,108 / 50,000
+└─ Height: 1
+```
+
+**Mempool State:**
+```
+Mempool: (empty - tx 0xAB... was included in block)
+```
+
+<Aside type="note" title="Orchestra Conductor Analogy">
+The blockchain orchestrates like a conductor:
+1. **Mempool** collects musician sheets (transactions)
+2. **Validator** checks if musicians can play their parts (validation)
+3. **Block Producer** selects which pieces to perform (transaction selection)
+4. **Executor** conducts the performance (VM execution)
+5. **State Manager** records the concert (state commitment)
+6. **ChainStore** archives the recording (block persistence)
+</Aside>
+
+**What Happens on Failure?**
+
+If any step fails (e.g., out of gas, revert), the transaction is marked as failed but still included in the block:
+
+```
+VM Execution (failure case):
+0x00: LOADI R0, 0           gas=3
+0x09: SLOAD R1, R0          gas=100
+...
+0x50: (some expensive operation)
+       ✗ OUT OF GAS
+
+State Changes:
+- Nonce STILL incremented (prevents replay)
+- Gas STILL charged (sender pays for computation)
+- Storage changes REVERTED (as if they never happened)
+- Balance decremented by full gas_limit * gas_price
+```
+
+This prevents DoS attacks where malicious users could spam failed transactions without cost.
+
 ---
 
 ## 5.7 State Transitions
@@ -1112,58 +1281,550 @@ Chain height: 2
 
 ## 5.11 Advanced Topics
 
-### Block Reorganization
+### Block Reorganization (Detailed)
 
-In PoA with a single authority, reorganizations (reorgs) don't occur — blocks are final. But in multi-authority PoA or PoS:
+In PoA with a single authority, reorganizations (reorgs) don't occur — blocks are final. But in multi-authority PoA or PoS, blocks might be produced simultaneously, creating forks:
 
 ```
-Normal chain:      A → B → C → D
-Reorg occurs:      A → B → C' → D'
-                       ↑ Fork point
+Timeline:
+T=0    Authority A: Genesis
+T=1    Authority B: Block 1B (parent: Genesis)
+T=1    Authority C: Block 1C (parent: Genesis) [conflict!]
+T=2    Authority A sees 1B first → builds Block 2B (parent: 1B)
+T=2    Authority B sees 1C → now what?
 ```
 
-Handling reorgs requires:
-1. Detecting the fork point
-2. Reverting blocks C and D
-3. Applying C' and D'
-4. Updating mempool (re-add reverted transactions)
+**Fork Choice Rule:** Longest chain (most cumulative work)
 
-<Aside type="note">
-**For learning:** We skip reorg handling. In production PoA with multiple authorities, you'd implement fork choice rules (longest chain, highest block number, etc.).
-</Aside>
+**Reorg Process:**
 
-### Transaction Receipts
-
-Receipts provide proof that a transaction was executed:
-
+**Step 1: Detect Fork**
 ```rust
-#[derive(Debug, Clone)]
-pub struct TransactionReceipt {
-    pub transaction_hash: Hash,
-    pub block_height: u64,
-    pub gas_used: u64,
-    pub success: bool,
-    pub logs: Vec<Log>, // Events emitted during execution
+impl ChainStore {
+    pub fn detect_fork(&self, new_block: &Block) -> Result<Option<u64>> {
+        let our_block = self.get_block_by_height(new_block.header.height)?;
+
+        if let Some(our_block) = our_block {
+            if our_block.hash() != new_block.hash() {
+                // Fork detected at this height
+                return Ok(Some(new_block.header.height));
+            }
+        }
+        Ok(None)
+    }
 }
 ```
 
-Receipts are stored separately from blocks and indexed by transaction hash for fast lookup.
+**Step 2: Find Common Ancestor**
+```rust
+pub fn find_common_ancestor(&self, height: u64) -> Result<u64> {
+    // Walk backwards until hashes match
+    for h in (0..=height).rev() {
+        let our_block = self.get_block_by_height(h)?
+            .ok_or(StorageError::BlockNotFound)?;
+        let their_block = /* fetch from peer */;
 
-### Light Clients
+        if our_block.hash() == their_block.hash() {
+            return Ok(h);  // Common ancestor found
+        }
+    }
+    Ok(0)  // Genesis is always common
+}
+```
 
-A **light client** doesn't store the full blockchain. Instead, it:
-1. Stores only block headers
-2. Verifies state using Merkle proofs
-3. Trusts PoA signatures
+**Step 3: Revert Blocks**
+```rust
+pub fn revert_to(&mut self, target_height: u64) -> Result<Vec<Transaction>> {
+    let current_height = self.get_height()?;
+    let mut reverted_txs = Vec::new();
+
+    // Revert blocks in reverse order
+    for h in ((target_height + 1)..=current_height).rev() {
+        let block = self.get_block_by_height(h)?
+            .ok_or(StorageError::BlockNotFound)?;
+
+        // Collect transactions to re-add to mempool
+        reverted_txs.extend(block.body.transactions.clone());
+
+        // Revert state changes (complex - requires state snapshots)
+        self.revert_state_for_block(&block)?;
+
+        // Remove block from chain
+        self.delete_block(h)?;
+    }
+
+    Ok(reverted_txs)
+}
+```
+
+**Step 4: Apply New Chain**
+```rust
+// Apply blocks from fork
+for block in new_chain_blocks {
+    self.execute_block(&block)?;
+    self.put_block(&block)?;
+}
+```
+
+**Step 5: Update Mempool**
+```rust
+// Re-add reverted transactions
+for tx in reverted_txs {
+    if !new_chain_includes(&tx) {
+        mempool.add_transaction(tx)?;
+    }
+}
+```
+
+**Complete Example:**
 
 ```
-Light client workflow:
-1. Download block header (300 bytes)
-2. Verify authority signature
-3. Request Merkle proof for specific account
-4. Verify proof against state_root
-5. Trust the account balance
+Initial chain (Authority A's view):
+  Genesis → 1B → 2B → 3B
+
+Authority B broadcasts longer chain:
+  Genesis → 1C → 2C → 3C → 4C
+
+Fork detected at height 1.
+Common ancestor: Genesis (height 0).
+
+Reorg process:
+  1. Revert 3B, 2B, 1B (collect txs)
+  2. Apply 1C, 2C, 3C, 4C
+  3. Re-add unique txs from 1B/2B/3B to mempool
+
+New chain:
+  Genesis → 1C → 2C → 3C → 4C
 ```
+
+<Aside type="caution">
+**State Reversion is Complex:**
+- Requires state snapshots at each block
+- Or: Replay all blocks from genesis to target height
+- Production systems use efficient state trie structures (Merkle Patricia Tries) with copy-on-write
+</Aside>
+
+<Aside type="note">
+**Why Minichain Skips This:**
+- Single authority = no concurrent blocks = no forks
+- State reversion requires snapshots (adds complexity)
+- Focus is on core blockchain concepts, not fork handling
+</Aside>
+
+### Transaction Receipts (Implementation)
+
+Receipts provide tamper-proof records of execution results.
+
+**Receipt Structure:**
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionReceipt {
+    // Identity
+    pub transaction_hash: Hash,
+    pub block_height: u64,
+    pub transaction_index: u32,
+
+    // Execution results
+    pub status: ExecutionStatus,
+    pub gas_used: u64,
+    pub gas_refund: u64,
+
+    // State changes
+    pub state_root: Hash,
+    pub logs: Vec<Log>,
+
+    // Optional
+    pub contract_address: Option<Address>,  // If deployment
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExecutionStatus {
+    Success,
+    Reverted { reason: String },
+    OutOfGas,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Log {
+    pub address: Address,
+    pub topics: Vec<Hash>,    // Indexed event parameters
+    pub data: Vec<u8>,        // Non-indexed data
+}
+```
+
+**Storing Receipts:**
+```rust
+impl ChainStore {
+    /// Store receipt indexed by transaction hash.
+    pub fn put_receipt(&self, receipt: &TransactionReceipt) -> Result<()> {
+        let key = format!("receipt:{}", receipt.transaction_hash.to_hex());
+        self.storage.put(key, receipt)
+    }
+
+    /// Retrieve receipt by transaction hash.
+    pub fn get_receipt(&self, tx_hash: &Hash) -> Result<Option<TransactionReceipt>> {
+        let key = format!("receipt:{}", tx_hash.to_hex());
+        self.storage.get(key)
+    }
+
+    /// Get all receipts for a block.
+    pub fn get_receipts_for_block(&self, height: u64) -> Result<Vec<TransactionReceipt>> {
+        let block = self.get_block_by_height(height)?
+            .ok_or(StorageError::BlockNotFound)?;
+        let mut receipts = Vec::new();
+
+        for tx in &block.body.transactions {
+            let tx_hash = tx.hash();
+            if let Some(receipt) = self.get_receipt(&tx_hash)? {
+                receipts.push(receipt);
+            }
+        }
+
+        Ok(receipts)
+    }
+}
+```
+
+**Creating Receipts During Execution:**
+```rust
+impl Executor {
+    pub fn execute_with_receipt(&mut self, tx: &Transaction) -> Result<TransactionReceipt> {
+        let tx_hash = tx.hash();
+        let start_gas = tx.gas_limit;
+
+        // Execute transaction
+        let result = self.execute_transaction(tx);
+
+        // Compute gas used
+        let gas_used = start_gas - self.gas_remaining;
+
+        // Determine status
+        let status = match result {
+            Ok(_) => ExecutionStatus::Success,
+            Err(VmError::OutOfGas) => ExecutionStatus::OutOfGas,
+            Err(e) => ExecutionStatus::Reverted {
+                reason: e.to_string(),
+            },
+        };
+
+        // Build receipt
+        let receipt = TransactionReceipt {
+            transaction_hash: tx_hash,
+            block_height: self.current_block_height,
+            transaction_index: self.current_tx_index,
+            status,
+            gas_used,
+            gas_refund: 0,  // Gas refunds for storage deletion
+            state_root: self.state.compute_state_root()?,
+            logs: self.logs.drain(..).collect(),
+            contract_address: if tx.is_deploy() {
+                Some(tx.contract_address()?)
+            } else {
+                None
+            },
+        };
+
+        Ok(receipt)
+    }
+}
+```
+
+**Usage: Verify Transaction Execution**
+```rust
+// User checks if their transaction succeeded
+let tx_hash = Hash::from_hex("0xABCD...")?;
+let receipt = chain.get_receipt(&tx_hash)?.expect("receipt not found");
+
+match receipt.status {
+    ExecutionStatus::Success => {
+        println!("✓ Transaction succeeded");
+        println!("  Gas used: {}", receipt.gas_used);
+        println!("  Block: {}", receipt.block_height);
+    }
+    ExecutionStatus::Reverted { reason } => {
+        println!("✗ Transaction reverted: {}", reason);
+    }
+    ExecutionStatus::OutOfGas => {
+        println!("✗ Transaction ran out of gas");
+    }
+}
+```
+
+**Event Logs in Receipts:**
+
+Contracts can emit logs (events) to notify external observers:
+
+```rust
+// In VM: LOG opcode
+pub fn op_log(&mut self, address_reg: u8, data_reg: u8, topic_count: u8) -> Result<()> {
+    let address = self.context.contract_address;
+    let data_ptr = self.registers[data_reg as usize];
+    let data_len = self.registers[(data_reg + 1) as usize];
+    let data = self.memory.read_range(data_ptr, data_len)?;
+
+    // Read topics from registers
+    let mut topics = Vec::new();
+    for i in 0..topic_count {
+        let topic_reg = data_reg + 2 + i;
+        let topic_value = self.registers[topic_reg as usize];
+        topics.push(Hash::from_u64(topic_value));
+    }
+
+    // Create log entry
+    let log = Log {
+        address,
+        topics,
+        data,
+    };
+
+    self.logs.push(log);
+    Ok(())
+}
+```
+
+**Example: ERC-20 Transfer Event**
+```rust
+// Event: Transfer(address indexed from, address indexed to, uint256 amount)
+
+Log {
+    address: token_contract_address,
+    topics: [
+        keccak256("Transfer(address,address,uint256)"),  // Event signature
+        Hash::from(from_address),                         // Indexed: from
+        Hash::from(to_address),                           // Indexed: to
+    ],
+    data: amount.to_le_bytes().to_vec(),                 // Non-indexed: amount
+}
+```
+
+<Aside type="tip">
+**Why Separate Receipts from Blocks?**
+- Blocks contain transactions (inputs)
+- Receipts contain execution results (outputs)
+- Separating them allows:
+  - Light clients to download blocks without receipts
+  - Fast receipt lookup by transaction hash
+  - Efficient pruning (delete old receipts, keep blocks)
+</Aside>
+
+### Light Clients (Merkle Proofs)
+
+A **light client** verifies blockchain state without downloading the full chain.
+
+**Full Node vs Light Client:**
+
+| Component | Full Node | Light Client |
+|-----------|-----------|--------------|
+| Storage | Full blocks + state | Only headers |
+| Verification | Executes all transactions | Verifies Merkle proofs |
+| Trust model | Trustless (re-executes) | Trusts PoA signatures |
+| Bandwidth | ~100 MB/day | ~100 KB/day |
+| Use case | Mining, archival | Mobile wallets, IoT |
+
+**Light Client Workflow:**
+
+**Step 1: Sync Block Headers**
+```rust
+pub struct LightClient {
+    headers: Vec<BlockHeader>,
+    trusted_authorities: HashSet<Address>,
+}
+
+impl LightClient {
+    pub fn sync_headers(&mut self, peer: &Peer) -> Result<()> {
+        let latest_height = peer.get_chain_height()?;
+        let our_height = self.headers.len() as u64;
+
+        // Download missing headers
+        for h in (our_height + 1)..=latest_height {
+            let header = peer.get_block_header(h)?;
+
+            // Verify authority signature
+            self.verify_authority_signature(&header)?;
+
+            // Verify parent hash links correctly
+            if h > 0 {
+                let prev_hash = self.headers[(h - 1) as usize].hash();
+                if header.parent_hash != prev_hash {
+                    return Err(Error::InvalidChain);
+                }
+            }
+
+            self.headers.push(header);
+        }
+
+        Ok(())
+    }
+
+    fn verify_authority_signature(&self, header: &BlockHeader) -> Result<()> {
+        if !self.trusted_authorities.contains(&header.authority) {
+            return Err(Error::UntrustedAuthority);
+        }
+
+        let hash = header.signing_hash();
+        header.signature
+            .as_ref()
+            .ok_or(Error::MissingSignature)?
+            .verify(&hash, &header.authority)?;
+        Ok(())
+    }
+}
+```
+
+**Step 2: Request Account Proof**
+
+```rust
+// User wants to check Alice's balance without downloading full state
+let alice_addr = Address::from_hex("0xAA...")?;
+let proof = peer.get_account_proof(&alice_addr, block_height)?;
+```
+
+**Merkle Proof Structure:**
+```rust
+#[derive(Debug, Clone)]
+pub struct AccountProof {
+    pub address: Address,
+    pub account: Account,
+    pub proof: Vec<Hash>,      // Merkle proof (sibling hashes)
+    pub block_height: u64,
+}
+```
+
+**Step 3: Verify Proof Against State Root**
+
+```rust
+impl LightClient {
+    pub fn verify_account_proof(&self, proof: &AccountProof) -> Result<bool> {
+        // Get trusted state root from header
+        let header = &self.headers[proof.block_height as usize];
+        let trusted_state_root = header.state_root;
+
+        // Compute leaf hash (account data)
+        let account_bytes = bincode::serialize(&proof.account)?;
+        let leaf_hash = hash(&[proof.address.as_bytes(), &account_bytes].concat());
+
+        // Verify Merkle proof
+        let computed_root = self.compute_merkle_root(leaf_hash, &proof.proof);
+
+        Ok(computed_root == trusted_state_root)
+    }
+
+    fn compute_merkle_root(&self, leaf: Hash, proof: &[Hash]) -> Hash {
+        let mut current = leaf;
+
+        for sibling in proof {
+            // Combine hashes (order matters - left vs right)
+            current = hash(&[current.as_bytes(), sibling.as_bytes()].concat());
+        }
+
+        current
+    }
+}
+```
+
+**Visual Example: Merkle Proof for Account A**
+
+```
+State Trie (4 accounts):
+
+                Root (0x7d3f...)
+               /                \
+        H(A,B)                    H(C,D)
+        /    \                    /    \
+      A(✓)   B(proof)          C(proof)  D(proof)
+
+Light client receives:
+- Account A data
+- Proof: [Hash(B), Hash(C,D)]
+
+Verification:
+1. Compute H(A) from account data
+2. Combine H(A) + Hash(B) → H(A,B)
+3. Combine H(A,B) + Hash(C,D) → Root
+4. Compare with trusted state root from header
+```
+
+**Step 4: Query Account Balance**
+
+```rust
+// Complete light client query
+let balance = light_client.get_balance_at(&alice_addr, block_height)?;
+
+pub fn get_balance_at(&self, address: &Address, height: u64) -> Result<u64> {
+    // Request proof from full node
+    let proof = self.peer.get_account_proof(address, height)?;
+
+    // Verify proof against trusted header
+    if !self.verify_account_proof(&proof)? {
+        return Err(Error::InvalidProof);
+    }
+
+    // Trust the account balance
+    Ok(proof.account.balance)
+}
+```
+
+**Full Node: Generating Proofs**
+
+```rust
+impl ChainStore {
+    pub fn generate_account_proof(
+        &self,
+        address: &Address,
+        height: u64,
+    ) -> Result<AccountProof> {
+        let state = self.state_at_height(height)?;
+        let account = state.get_account(address)?;
+
+        // Collect all account hashes
+        let mut accounts = self.get_all_accounts_at_height(height)?;
+        accounts.sort_by_key(|a| a.address);
+
+        // Find target account index
+        let target_idx = accounts.iter()
+            .position(|a| a.address == *address)
+            .ok_or(Error::AccountNotFound)?;
+
+        // Generate Merkle proof (sibling hashes on path to root)
+        let proof = self.generate_merkle_proof(&accounts, target_idx)?;
+
+        Ok(AccountProof {
+            address: *address,
+            account,
+            proof,
+            block_height: height,
+        })
+    }
+}
+```
+
+**Security Considerations:**
+
+<Aside type="caution">
+**Trust Model:**
+- Light clients trust authority signatures (PoA assumption)
+- Merkle proofs are trustless (cryptographically verified)
+- If 51% of authorities are malicious, light clients can be deceived
+- Use multiple authorities + longest chain rule for better security
+</Aside>
+
+**Bandwidth Comparison:**
+
+| Operation | Full Node | Light Client |
+|-----------|-----------|--------------|
+| Sync block | ~10 KB (txs + state) | ~300 bytes (header only) |
+| Verify balance | 0 (already has state) | ~500 bytes (proof) |
+| Daily sync | ~100 MB | ~100 KB |
+
+**Real-World Example:**
+
+Ethereum light clients (Geth's LES protocol) use this exact pattern:
+1. Download headers (~500 bytes each)
+2. Verify PoW/PoS consensus
+3. Request Merkle-Patricia proofs for specific accounts/storage
+4. Mobile wallets (MetaMask mobile, Status) use light clients
 
 ---
 

@@ -1047,15 +1047,55 @@ impl Block {
 
 A merkle tree lets us summarize many items into a single hash, with efficient proofs.
 
-### Structure
+### Merkle Tree Structure
+
+Here's how a 4-transaction merkle tree is constructed:
 
 ```
-        Root
-       /    \
-      H01    H23
-     /  \   /  \
-    H0  H1 H2  H3   ← Transaction hashes
+Transactions:           T0          T1          T2          T3
+                        │           │           │           │
+                        ↓           ↓           ↓           ↓
+Leaf Hashes:         H(T0)       H(T1)       H(T2)       H(T3)
+                        │           │           │           │
+                        └────┬──────┘           └────┬──────┘
+                             │                       │
+                             ↓                       ↓
+Branch Hashes:           H(H(T0)+H(T1))         H(H(T2)+H(T3))
+                             │                       │
+                             └───────────┬───────────┘
+                                         │
+                                         ↓
+Merkle Root:                      H(Branch0+Branch1)
+                                (stored in block header)
 ```
+
+**Proof that T1 is in the block:**
+```
+To prove T1 exists without providing T0, T2, T3:
+
+Prover sends:
+  1. T1 (the transaction data)
+  2. H(T0)           ← Sibling hash
+  3. H(T2+T3)        ← Uncle hash
+
+Verifier computes:
+  Step 1: H(T1) → get transaction hash
+  Step 2: H(T0) + H(T1) → compute H(T0,T1)
+  Step 3: H(T0,T1) + H(T2,T3) → compute Root
+  Step 4: Compare with block header's merkle_root
+
+If match → T1 is in the block ✓
+```
+
+<Aside type="tip">
+**Why This Matters:**
+A block with 1,000 transactions has a Merkle tree of depth 10.
+To prove any transaction is included, you only need:
+- The transaction data (~200 bytes)
+- 10 sibling hashes (320 bytes)
+
+Instead of downloading all 1,000 transactions (~200 KB), you verify inclusion with ~520 bytes — a 99.7% savings! This is how light clients (mobile wallets) can verify payments without storing the entire blockchain.
+</Aside>
 
 ### Computing the Root
 
