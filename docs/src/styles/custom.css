@@ -1,5 +1,8 @@
 /* Custom styles for the minichain book */
 
+/* ===== External Imports (must be first) ===== */
+@import 'katex/dist/katex.min.css';
+
 /* Light mode accent colors */
 :root[data-theme='light'] {
 	--sl-color-accent-low: #fff0f3;
@@ -49,3 +52,25 @@ a[href^="https://"]::after {
 	font-size: 0.85em;
 	opacity: 0.7;
 }
+
+/* ===== KaTeX Math Rendering ===== */
+
+/* Dark mode KaTeX adjustments */
+:root[data-theme='dark'] .katex {
+	color: var(--sl-color-text);
+}
+
+/* Display math styling */
+.katex-display {
+	overflow-x: auto;
+	margin: 1.5em 0;
+	padding: 1em;
+	background-color: var(--sl-color-bg-inline-code);
+	border-radius: 0.5rem;
+}
+
+/* Inline math styling */
+.katex {
+	font-size: 1.1em;
+}
+
