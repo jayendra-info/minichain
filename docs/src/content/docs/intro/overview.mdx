@@ -53,8 +53,8 @@ We prioritize **learning over production-readiness**. Every component is designe
 
 | Component | Technology | Why |
 |-----------|------------|-----|
-| Hashing | Blake3 | Fast, secure, modern |
-| Signing | Ed25519 | Fast, compact signatures |
+| Hashing | Blake3 | Fast, secure, modern ([`blake3` crate](https://github.com/BLAKE3-team/BLAKE3)) |
+| Signing | Ed25519 | Fast, compact signatures ([`ed25519-dalek` crate](https://github.com/dalek-cryptography/curve25519-dalek), [comparison](/part1/chapter1-core#why-ed25519-over-secp256k1)) |
 | Storage | sled | Embedded, transactional |
 | Serialization | bincode | Compact binary format |
 | CLI | clap | Rust standard for CLIs |

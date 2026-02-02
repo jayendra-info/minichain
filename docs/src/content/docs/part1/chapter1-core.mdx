@@ -131,6 +131,129 @@ Think of blockchain cryptography like a bank account:
 The key difference: in a bank, the bank verifies your signature. On a blockchain, **anyone** can verify it using math — no trusted third party needed.
 </Aside>
 
+### Why Ed25519 Over secp256k1?
+
+Ethereum uses **secp256k1** (the same curve as Bitcoin). So why does Minichain choose **Ed25519**?
+
+#### The Two Main Signature Schemes
+
+| Feature | Ed25519 | secp256k1 (Ethereum) |
+|---------|---------|----------------------|
+| **Signature Size** | 64 bytes | 64-65 bytes |
+| **Public Key Size** | 32 bytes | 33-65 bytes (compressed/uncompressed) |
+| **Speed** | Very fast (~5-10x faster signing) | Moderate |
+| **Public Key Recovery** | ❌ No (needs explicit pubkey) | ✅ Yes (from signature + message) |
+| **Security Level** | ~128 bits | ~128 bits |
+| **Standardization** | Modern (2011) | Older (Bitcoin-era) |
+| **Use Cases** | SSH, TLS, Signal | Bitcoin, Ethereum, most blockchains |
+
+#### Key Trade-off: Public Key Recovery
+
+The biggest difference is **public key recovery**:
+
+**secp256k1 (Ethereum):**
+```rust
+// Ethereum can recover the signer's public key from just the signature
+let signature = sign(message, private_key);
+let public_key = recover_pubkey(signature, message); // ✓ Possible
+let address = hash(public_key); // Derive address from recovered pubkey
+```
+
+**Ed25519 (Minichain):**
+```rust
+// Ed25519 requires the public key to verify
+let signature = sign(message, private_key);
+// Cannot recover public key from signature alone!
+// Must store/provide public key explicitly for verification
+verify(message, signature, public_key); // ✓ Requires pubkey
+```
+
+#### Why This Matters for Blockchain
+
+**Ethereum's Advantage (secp256k1):**
+- Transactions only need signature (not public key) → smaller
+- Block headers don't need `author` field → simpler
+- Address is directly derived from signature
+
+**Minichain's Choice (Ed25519):**
+- **Faster signing/verification** (important for throughput)
+- **Simpler implementation** (no complex recovery algorithm)
+- **Smaller public keys** (32 bytes vs 33-65 bytes)
+- **Modern cryptography** (designed with side-channel resistance)
+
+**Architectural Consequence:**
+Since Ed25519 can't recover public keys, Minichain blocks must include an explicit `author` field (see section on [`author` field](#author--block-producer) below). This is a small overhead (~20 bytes per block) in exchange for faster cryptography.
+
+#### Why Ethereum Chose secp256k1
+
+<Aside type="note">
+Ethereum inherited secp256k1 from Bitcoin for:
+1. **Ecosystem compatibility** — wallets, tools, libraries already existed
+2. **Public key recovery** — reduces transaction size (no pubkey needed)
+3. **Battle-tested** — Bitcoin proved its security for years
+
+But secp256k1 is **slower and more complex** than modern alternatives. If designing from scratch today (like Minichain), Ed25519 is often preferred for its speed and simplicity.
+</Aside>
+
+#### Why Minichain Chooses Ed25519
+
+For a **learning blockchain**, the advantages are clear:
+
+| Priority | Why Ed25519 Wins |
+|----------|------------------|
+| **Simplicity** | No complex recovery algorithm to implement |
+| **Performance** | 5-10x faster signing (better for testing/development) |
+| **Modern best practices** | Recommended by cryptographers for new systems |
+| **Small overhead** | Explicit `author` field is only ~20 bytes per block |
+
+<Aside type="tip">
+**Real-world examples:**
+- **Signal** (messaging app) uses Ed25519
+- **SSH** (secure shell) uses Ed25519
+- **libsodium** (crypto library) defaults to Ed25519
+- **Solana** (blockchain) uses Ed25519
+
+Meanwhile, Bitcoin/Ethereum are "locked in" to secp256k1 for backwards compatibility.
+</Aside>
+
+#### Implementation in Minichain
+
+Minichain uses battle-tested Rust crates for cryptography:
+
+**For Ed25519 signatures:**
+- **Crate:** [`ed25519-dalek`](https://github.com/dalek-cryptography/curve25519-dalek) version 2.1
+- **What it provides:** Fast, safe Ed25519 signing and verification
+- **Why this crate:** Industry standard, used by Signal, 1Password, and many Rust projects
+- **Features:** Side-channel resistant, no unsafe code, thoroughly audited
+
+**For hashing (Blake3):**
+- **Crate:** [`blake3`](https://github.com/BLAKE3-team/BLAKE3) version 1.5
+- **What it provides:** Cryptographic hash function (addresses, block hashes, Merkle trees)
+- **Why this crate:** Fastest secure hash, official reference implementation
+- **Performance:** ~10x faster than SHA-256, parallelizable
+
+```rust
+// From crates/core/Cargo.toml
+[dependencies]
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+```
+
+Both crates are maintained by respected cryptography teams and widely used in production systems.
+
+<Aside type="tip" title="Want to learn more about elliptic curves?">
+This section compares Ed25519 and secp256k1, but there's a whole landscape of elliptic curve families (Montgomery, Edwards, Weierstrass, pairing-friendly) each optimized for different use cases.
+
+**See [Appendix A: Elliptic Curve Taxonomy](/appendix/elliptic-curves)** for a comprehensive guide covering:
+- Four major curve families and their mathematical properties
+- Why Montgomery curves (X25519) are perfect for key exchange
+- How pairing-friendly curves (BLS12-381) enable signature aggregation & zero-knowledge proofs
+- The evolution from "mathematically elegant" to "engineered for safety"
+- What modern systems actually use in production
+
+Perfect for understanding the broader cryptographic landscape beyond Minichain's choices.
+</Aside>
+
 ### Address Derivation
 
 An address is derived from a public key:
@@ -349,6 +472,31 @@ Every transaction must include the sender's current nonce. This prevents:
 - **Replay attacks** — can't resubmit the same transaction
 - **Transaction ordering** — nonces must be sequential
 
+<Aside type="note" title="How state_root enforces nonce integrity">
+The nonce is part of the `Account` struct, which means every account's nonce is included in the world state. The block's `state_root` (covered [later](#state_root--world-state-commitment-and-the-need-of-it)) is a cryptographic commitment to **all account data**, including nonces.
+
+**Why this matters for replay prevention:**
+
+```rust
+// Account state (committed to by state_root)
+pub struct Account {
+    pub nonce: u64,        // ← This prevents replays
+    pub balance: u64,
+    pub code_hash: Option<Hash>,
+    pub storage_root: Hash,
+}
+```
+
+When a block is finalized with `state_root = H`, it cryptographically locks in:
+1. **Alice's current nonce** = 5
+2. **Bob's current nonce** = 12
+3. All other account nonces
+
+If someone tries to replay Alice's transaction with nonce=5 in a future block, it will be rejected because Alice's nonce has already moved to 6. The `state_root` in the block header proves what nonces were valid at that point in history.
+
+**Implementation:** See `crates/core/src/account.rs` for the `Account` struct definition.
+</Aside>
+
 ---
 
 ## 1.4 Transactions
@@ -447,6 +595,28 @@ Same steps every time = same gas every time.
 | EOA → EOA transfer | Fixed: 21,000 |
 | Contract deployment | Variable: depends on bytecode size |
 | Contract call | Variable: depends on code execution path |
+
+<Aside type="note">
+**Ethereum compatibility:** The 21,000 gas for EOA → EOA transfers matches Ethereum's standard. This is hardcoded in Minichain's executor:
+
+```rust
+// From crates/chain/src/executor.rs
+fn execute_transfer(&self, tx: &Transaction)
+    -> Result<(bool, u64, Option<Address>, Option<String>)> {
+    let to = tx.to.expect("transfer must have recipient");
+
+    // Transfer value
+    if tx.value > 0 {
+        self.state.transfer(&tx.from, &to, tx.value)?;
+    }
+
+    // Transfer uses 21,000 gas
+    Ok((true, 21_000, None, None))
+}
+```
+
+This constant ensures predictable costs for simple transfers across both chains.
+</Aside>
 
 The `Transaction` struct handles **all** types. For simple transfers, `gas_limit = 21,000` is just a formality. For contract interactions, it's crucial — the same function might use 50,000 or 500,000 gas depending on inputs and state.
 
@@ -796,8 +966,29 @@ Before Block 5:                     After Block 5:
 | **Light clients** | Ask "What's Alice's balance?" → get merkle proof against state_root. No need to download all accounts. |
 | **State sync** | New node downloads current state, verifies against latest state_root. No need to replay all history from genesis. |
 | **Detecting bugs** | If two nodes get different state_roots from same transactions → non-determinism bug (serious!). |
+| **Replay protection** | Commits to all account nonces. Once a block is finalized, you can prove what nonces were valid at that height. |
 
 **The key insight:** `merkle_root` proves "these transactions were included." `state_root` proves "executing them produced this exact world state."
+
+<Aside type="tip" title="state_root includes replay protection">
+Since `state_root` is a cryptographic commitment to **all accounts** (including their nonces), it indirectly proves the replay-protection state at any given block height.
+
+**Example scenario:**
+```
+Block 100: state_root = 0xabc...
+  └─ Alice: { nonce: 5, balance: 1000, ... }
+
+Block 101: state_root = 0xdef...
+  └─ Alice: { nonce: 6, balance: 900, ... }  ← nonce incremented
+```
+
+Anyone can verify:
+- At block 100, Alice's valid nonce was 5
+- At block 101, Alice's valid nonce is 6
+- Trying to replay a transaction with nonce=5 after block 100? **Rejected!**
+
+The state_root in each block header cryptographically commits to these nonce values, making historical replay attacks provably invalid. See the [Nonce section](#nonce-preventing-replay-attacks) for how nonces prevent replays.
+</Aside>
 
 **Is it built the same way as merkle_root?**
 
@@ -854,7 +1045,7 @@ Even here, you *could* derive author from `height % num_authorities`. But explic
 | **Dynamic authority set** | Authorities added/removed over time. History needs to record who actually signed. |
 | **Self-describing blocks** | Block makes sense without external context (which authority set was active at that height?). |
 
-**Also: Ed25519 requires it.** Unlike secp256k1 (Ethereum), you can't recover the public key from an Ed25519 signature. So we need `author` to look up the correct public key for verification.
+**Also: Ed25519 requires it.** Unlike secp256k1 (Ethereum), you can't recover the public key from an Ed25519 signature. So we need `author` to look up the correct public key for verification. (See [Why Ed25519 Over secp256k1?](#why-ed25519-over-secp256k1) for a detailed comparison.)
 
 We'll decide between single vs rotating authorities when implementing the consensus layer in [Chapter 5](/part5/chapter5-chain).
 

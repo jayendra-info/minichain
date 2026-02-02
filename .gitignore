@@ -35,3 +35,8 @@ docs/.astro/
 
 # Docs - dependencies
 docs/node_modules/
+
+# Docs - TikZ cache (optional: remove this line to commit cache for faster CI builds)
+docs/.tikz-cache/
+*.tikz.svg
+docs/src/assets/diagrams/.astro/

@@ -1,9 +1,28 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 
 // https://astro.build/config
 export default defineConfig({
+	markdown: {
+		remarkPlugins: [remarkMath],
+		rehypePlugins: [
+			[
+				rehypeKatex,
+				{
+					strict: false, // Handle Starlight edge cases
+					trust: true,
+					macros: {
+						'\\Hash': '\\mathcal{H}',
+						'\\Sig': '\\mathsf{Sig}',
+						'\\Ver': '\\mathsf{Ver}',
+					},
+				},
+			],
+		],
+	},
 	integrations: [
 		starlight({
 			title: 'Building a Blockchain from Scratch',
@@ -72,6 +91,12 @@ export default defineConfig({
 					label: 'Part 6: CLI',
 					items: [
 						{ label: 'Chapter 6: Command Line Interface', slug: 'part6/chapter6-cli' },
+					],
+				},
+				{
+					label: 'Appendices',
+					items: [
+						{ label: 'A: Elliptic Curve Taxonomy', slug: 'appendix/elliptic-curves' },
 					],
 				},
 			],
