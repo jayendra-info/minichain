@@ -1,6 +1,6 @@
 # Minichain
 
-A minimal blockchain implementation in Rust — built for learning.
+A minimal toy blockchain implementation in Rust — built for learning.
 
 ## What is this?
 
