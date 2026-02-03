@@ -258,13 +258,7 @@ Perfect for understanding the broader cryptographic landscape beyond Minichain's
 
 An address is derived from a public key:
 
-```
-Public Key (32 bytes)
-        ↓
-   Blake3 Hash
-        ↓
- First 20 bytes = Address
-```
+![Address Derivation](../../../assets/diagrams/address-derivation.svg)
 
 ```rust
 pub type AddressBytes = [u8; 20];
@@ -929,15 +923,7 @@ Hash of the previous block's header. This is what makes it a *chain* — each bl
 
 A block can contain hundreds of transactions, but we represent them with a single 32-byte hash:
 
-```
-Tx0   Tx1   Tx2   Tx3        ← 4 transactions
- ↓     ↓     ↓     ↓
-H0    H1    H2    H3         ← hash each one
-  \  /        \  /
-   H01         H23           ← hash pairs together
-      \       /
-       merkle_root           ← single hash commits to ALL transactions
-```
+![Merkle Tree Structure](../../../assets/diagrams/merkle-tree.svg)
 
 Change any transaction → the root changes. This is a **merkle tree** — we'll cover it in detail in [section 1.6](#16-merkle-trees).
 
