@@ -74,3 +74,77 @@ a[href^="https://"]::after {
 	font-size: 1.1em;
 }
 
+/* ===== Table of Contents Improvements ===== */
+
+/* Make ToC scrollable with visible scrollbar */
+.right-sidebar nav {
+	max-height: calc(100vh - 8rem);
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding-right: 0.5rem;
+}
+
+/* Style the scrollbar for better visibility */
+.right-sidebar nav::-webkit-scrollbar {
+	width: 6px;
+}
+
+.right-sidebar nav::-webkit-scrollbar-track {
+	background: var(--sl-color-bg-nav);
+	border-radius: 3px;
+}
+
+.right-sidebar nav::-webkit-scrollbar-thumb {
+	background: var(--sl-color-gray-4);
+	border-radius: 3px;
+}
+
+.right-sidebar nav::-webkit-scrollbar-thumb:hover {
+	background: var(--sl-color-accent);
+}
+
+/* Add more spacing between major sections */
+.right-sidebar nav > ul > li {
+	margin-bottom: 0.75rem;
+}
+
+/* Make H2 sections (e.g., "2.1", "2.2") more prominent */
+.right-sidebar nav > ul > li > a {
+	font-weight: 600;
+	color: var(--sl-color-text);
+	font-size: 0.95rem;
+}
+
+/* Style H3 subsections with lighter weight and indentation */
+.right-sidebar nav > ul > li > ul > li > a {
+	font-weight: 400;
+	color: var(--sl-color-text-accent);
+	font-size: 0.875rem;
+	padding-left: 0.75rem;
+}
+
+/* Add subtle left border for nested items */
+.right-sidebar nav > ul > li > ul {
+	border-left: 2px solid var(--sl-color-hairline-light);
+	margin-left: 0.5rem;
+	padding-left: 0.25rem;
+	margin-top: 0.25rem;
+}
+
+/* Highlight current section with accent color */
+.right-sidebar nav a[aria-current='true'] {
+	color: var(--sl-color-accent);
+	font-weight: 600;
+}
+
+/* Hover effect for better interactivity */
+.right-sidebar nav a:hover {
+	color: var(--sl-color-accent-high);
+	text-decoration: none;
+}
+
+/* Compact spacing for cleaner look */
+.right-sidebar nav ul {
+	line-height: 1.5;
+}
+

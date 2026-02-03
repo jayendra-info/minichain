@@ -371,7 +371,31 @@ We organize opcodes into categories:
 
 ## 3.3 Opcode Definitions
 
-Let's define our instruction set:
+Our VM uses a **50-instruction** set organized into 9 categories: control flow, arithmetic, bitwise, comparison, memory, storage, immediate, context, and debug operations.
+
+<Aside type="note" title="Complete Instruction Set Reference">
+For the full instruction set with syntax, gas costs, and examples, see [Appendix C: Complete Instruction Set Reference](/appendix/instruction-set).
+
+This section focuses on the VM implementation. For assembly programming usage, see [Chapter 4, Section 4.2](/part4/chapter4-assembler).
+</Aside>
+
+### Instruction Categories
+
+Our instruction set is organized by opcode ranges:
+
+| Range | Category | Purpose | Example Instructions |
+|-------|----------|---------|---------------------|
+| `0x00-0x0F` | Control Flow | Program control | HALT, JUMP, JUMPI, CALL, RET |
+| `0x10-0x1F` | Arithmetic | Math operations | ADD, SUB, MUL, DIV, MOD |
+| `0x20-0x2F` | Bitwise | Bit manipulation | AND, OR, XOR, NOT, SHL, SHR |
+| `0x30-0x3F` | Comparison | Value comparison | EQ, LT, GT, LE, GE, ISZERO |
+| `0x40-0x4F` | Memory | RAM operations (temp) | LOAD8, LOAD64, STORE8, STORE64 |
+| `0x50-0x5F` | Storage | Disk operations (persistent) | SLOAD, SSTORE |
+| `0x70-0x7F` | Immediate | Constants & data movement | LOADI, MOV |
+| `0x80-0x8F` | Context | Execution environment | CALLER, ADDRESS, TIMESTAMP |
+| `0xF0-0xFF` | Debug | Debugging & logging | LOG |
+
+### Opcode Enum Definition
 
 ```rust
 // crates/vm/src/opcodes.rs
@@ -380,163 +404,141 @@ Let's define our instruction set:
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Opcode {
-    // =========== Control Flow (0x00-0x0F) ===========
-    /// Stop execution successfully
+    // Control Flow (0x00-0x0F)
     HALT = 0x00,
-    /// Do nothing
     NOP = 0x01,
-    /// Unconditional jump: PC = R[src]
     JUMP = 0x02,
-    /// Conditional jump: if R[cond] != 0, PC = R[target]
     JUMPI = 0x03,
-    /// Call subroutine: push return address, jump to R[target]
     CALL = 0x04,
-    /// Return from subroutine: pop return address, jump to it
     RET = 0x05,
-    /// Revert execution with error
     REVERT = 0x0F,
 
-    // =========== Arithmetic (0x10-0x1F) ===========
-    /// R[dst] = R[s1] + R[s2]
+    // Arithmetic (0x10-0x1F)
     ADD = 0x10,
-    /// R[dst] = R[s1] - R[s2]
     SUB = 0x11,
-    /// R[dst] = R[s1] * R[s2]
     MUL = 0x12,
-    /// R[dst] = R[s1] / R[s2] (unsigned, traps on div by zero)
     DIV = 0x13,
-    /// R[dst] = R[s1] % R[s2] (unsigned modulo)
     MOD = 0x14,
-    /// R[dst] = R[s1] + immediate
     ADDI = 0x15,
 
-    // =========== Bitwise (0x20-0x2F) ===========
-    /// R[dst] = R[s1] & R[s2]
+    // Bitwise (0x20-0x2F)
     AND = 0x20,
-    /// R[dst] = R[s1] | R[s2]
     OR = 0x21,
-    /// R[dst] = R[s1] ^ R[s2]
     XOR = 0x22,
-    /// R[dst] = ~R[src]
     NOT = 0x23,
-    /// R[dst] = R[s1] << R[s2]
     SHL = 0x24,
-    /// R[dst] = R[s1] >> R[s2] (logical shift)
     SHR = 0x25,
 
-    // =========== Comparison (0x30-0x3F) ===========
-    /// R[dst] = R[s1] == R[s2] ? 1 : 0
+    // Comparison (0x30-0x3F)
     EQ = 0x30,
-    /// R[dst] = R[s1] != R[s2] ? 1 : 0
     NE = 0x31,
-    /// R[dst] = R[s1] < R[s2] ? 1 : 0 (unsigned)
     LT = 0x32,
-    /// R[dst] = R[s1] > R[s2] ? 1 : 0 (unsigned)
     GT = 0x33,
-    /// R[dst] = R[s1] <= R[s2] ? 1 : 0
     LE = 0x34,
-    /// R[dst] = R[s1] >= R[s2] ? 1 : 0
     GE = 0x35,
-    /// R[dst] = R[src] == 0 ? 1 : 0
     ISZERO = 0x36,
 
-    // =========== Memory (0x40-0x4F) - RAM Operations ===========
-    // These access temporary linear memory (like RAM on a computer).
-    // Fast and cheap, but data is lost when execution ends.
-    // Use for temporary computation, buffers, and working data.
-
-    /// R[dst] = Memory[R[addr]] (1 byte)
+    // Memory - RAM (0x40-0x4F)
     LOAD8 = 0x40,
-    /// R[dst] = Memory[R[addr]] (8 bytes, little-endian)
     LOAD64 = 0x41,
-    /// Memory[R[addr]] = R[src] (1 byte)
     STORE8 = 0x42,
-    /// Memory[R[addr]] = R[src] (8 bytes, little-endian)
     STORE64 = 0x43,
-    /// R[dst] = size of memory in bytes
     MSIZE = 0x44,
-    /// Copy memory: memcpy(R[dst], R[src], R[len])
     MCOPY = 0x45,
 
-    // =========== Storage (0x50-0x5F) - Disk Operations ===========
-    // These access persistent contract storage (like a hard drive).
-    // Slow and expensive, but data persists across transactions.
-    // Use for contract state that must survive (balances, ownership, etc.).
-
-    /// R[dst] = Storage[R[key]] (persistent, 32-byte slot)
+    // Storage - Disk (0x50-0x5F)
     SLOAD = 0x50,
-    /// Storage[R[key]] = R[value] (persistent, 32-byte slot)
     SSTORE = 0x51,
 
-    // =========== Immediate (0x70-0x7F) ===========
-    /// R[dst] = immediate_64bit
+    // Immediate (0x70-0x7F)
     LOADI = 0x70,
-    /// R[dst] = R[src]
     MOV = 0x71,
 
-    // =========== Context (0x80-0x8F) ===========
-    /// R[dst] = caller's address (as u64, truncated)
+    // Context (0x80-0x8F)
     CALLER = 0x80,
-    /// R[dst] = value sent with this call
     CALLVALUE = 0x81,
-    /// R[dst] = this contract's address
     ADDRESS = 0x82,
-    /// R[dst] = current block number
     BLOCKNUMBER = 0x83,
-    /// R[dst] = current block timestamp
     TIMESTAMP = 0x84,
-    /// R[dst] = remaining gas
     GAS = 0x85,
 
-    // =========== Debug (0xF0-0xFF) ===========
-    /// Log R[src] value (for debugging)
+    // Debug (0xF0-0xFF)
     LOG = 0xF0,
 }
 ```
 
 <Aside type="tip" title="Memory vs Storage: RAM vs Disk">
-**Why do we need both Memory and Storage opcodes?**
+**Why separate Memory and Storage opcodes?**
 
 | Aspect | Memory (RAM) | Storage (Disk) |
 |--------|-------------|----------------|
 | **Persistence** | Temporary — cleared after execution | Permanent — survives across transactions |
 | **Speed** | Fast (in-memory array) | Slow (database read/write) |
 | **Cost** | Cheap (~3 gas per operation) | Expensive (~100 gas read, ~5,000-20,000 gas write) |
-| **Use Case** | Temporary computation, buffers, local variables | Contract state, balances, ownership records |
-| **Analogy** | RAM in your computer | Hard drive in your computer |
+| **Use Case** | Temporary computation, buffers | Contract state, balances |
 
-**Example:** If you're calculating the sum of 100 numbers, you'd use Memory opcodes (LOAD64/STORE64) to store intermediate results. But if you want to save the final total so it's available in the next transaction, you'd use SSTORE to write it to Storage.
-
-```asm
-; Temporary calculation (use Memory - RAM)
-LOADI R0, 100        ; First number
-LOADI R1, 0          ; Memory address 0
-STORE64 R1, R0       ; Store to temporary memory
-
-; Permanent state (use Storage - Disk)
-LOADI R2, 0          ; Storage key 0
-SLOAD R3, R2         ; Load previous total from disk
-ADD R3, R3, R0       ; Add to it
-SSTORE R2, R3        ; Save back to disk (persists!)
-```
-
-This separation mirrors how real computers work: fast volatile RAM for active computation, slow persistent disk for data that must survive.
+This mirrors real computers: fast volatile RAM for active work, slow persistent disk for data that must survive.
 </Aside>
 
 ### Implementing Opcode Parsing
 
 ```rust
 impl Opcode {
-    /// Try to parse a byte as an opcode.
+    /// Parse a byte as an opcode.
     pub fn from_byte(byte: u8) -> Option<Self> {
         match byte {
             0x00 => Some(Opcode::HALT),
             0x01 => Some(Opcode::NOP),
             0x02 => Some(Opcode::JUMP),
-            // ... all other opcodes
+            0x03 => Some(Opcode::JUMPI),
+            0x04 => Some(Opcode::CALL),
+            0x05 => Some(Opcode::RET),
+            0x0F => Some(Opcode::REVERT),
+
             0x10 => Some(Opcode::ADD),
             0x11 => Some(Opcode::SUB),
-            // ...
+            0x12 => Some(Opcode::MUL),
+            0x13 => Some(Opcode::DIV),
+            0x14 => Some(Opcode::MOD),
+            0x15 => Some(Opcode::ADDI),
+
+            0x20 => Some(Opcode::AND),
+            0x21 => Some(Opcode::OR),
+            0x22 => Some(Opcode::XOR),
+            0x23 => Some(Opcode::NOT),
+            0x24 => Some(Opcode::SHL),
+            0x25 => Some(Opcode::SHR),
+
+            0x30 => Some(Opcode::EQ),
+            0x31 => Some(Opcode::NE),
+            0x32 => Some(Opcode::LT),
+            0x33 => Some(Opcode::GT),
+            0x34 => Some(Opcode::LE),
+            0x35 => Some(Opcode::GE),
+            0x36 => Some(Opcode::ISZERO),
+
+            0x40 => Some(Opcode::LOAD8),
+            0x41 => Some(Opcode::LOAD64),
+            0x42 => Some(Opcode::STORE8),
+            0x43 => Some(Opcode::STORE64),
+            0x44 => Some(Opcode::MSIZE),
+            0x45 => Some(Opcode::MCOPY),
+
+            0x50 => Some(Opcode::SLOAD),
+            0x51 => Some(Opcode::SSTORE),
+
+            0x70 => Some(Opcode::LOADI),
+            0x71 => Some(Opcode::MOV),
+
+            0x80 => Some(Opcode::CALLER),
+            0x81 => Some(Opcode::CALLVALUE),
+            0x82 => Some(Opcode::ADDRESS),
+            0x83 => Some(Opcode::BLOCKNUMBER),
+            0x84 => Some(Opcode::TIMESTAMP),
+            0x85 => Some(Opcode::GAS),
+
+            0xF0 => Some(Opcode::LOG),
+
             _ => None,
         }
     }
@@ -544,26 +546,32 @@ impl Opcode {
     /// Get the number of bytes this instruction consumes (including opcode).
     pub fn instruction_size(&self) -> usize {
         match self {
-            // No operands
+            // No operands (1 byte total)
             Opcode::HALT | Opcode::NOP | Opcode::RET => 1,
 
-            // One register
-            Opcode::JUMP | Opcode::NOT | Opcode::LOG => 2,
+            // One register (2 bytes: opcode + register)
+            Opcode::JUMP | Opcode::NOT | Opcode::LOG |
+            Opcode::MSIZE | Opcode::CALLER | Opcode::CALLVALUE |
+            Opcode::ADDRESS | Opcode::BLOCKNUMBER |
+            Opcode::TIMESTAMP | Opcode::GAS => 2,
 
-            // Two registers
-            Opcode::MOV | Opcode::LOAD8 | Opcode::STORE8 => 2,
+            // Two registers (2 bytes: opcode + packed registers)
+            Opcode::MOV | Opcode::LOAD8 | Opcode::STORE8 |
+            Opcode::LOAD64 | Opcode::STORE64 |
+            Opcode::SLOAD | Opcode::SSTORE | Opcode::ISZERO => 2,
 
-            // Three registers (packed into 2 bytes)
+            // Three registers (3 bytes: opcode + 2 packed register bytes)
             Opcode::ADD | Opcode::SUB | Opcode::MUL |
             Opcode::DIV | Opcode::MOD | Opcode::AND |
             Opcode::OR | Opcode::XOR | Opcode::SHL |
             Opcode::SHR | Opcode::EQ | Opcode::NE |
-            Opcode::LT | Opcode::GT | Opcode::LE | Opcode::GE => 3,
+            Opcode::LT | Opcode::GT | Opcode::LE |
+            Opcode::GE | Opcode::MCOPY | Opcode::JUMPI => 3,
 
-            // Register + 64-bit immediate
+            // Register + 64-bit immediate (10 bytes)
             Opcode::LOADI => 10,  // 1 (opcode) + 1 (reg) + 8 (immediate)
 
-            // Default
+            // Fallback
             _ => 2,
         }
     }

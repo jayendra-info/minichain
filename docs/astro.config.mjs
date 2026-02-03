@@ -27,6 +27,10 @@ export default defineConfig({
 		starlight({
 			title: 'Building a Blockchain from Scratch',
 			description: 'Learn how to build a minimal blockchain with Rust - from cryptographic primitives to a working CLI.',
+			tableOfContents: {
+				minHeadingLevel: 2,
+				maxHeadingLevel: 3,
+			},
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/example/minichain' },
 			],
@@ -97,6 +101,8 @@ export default defineConfig({
 					label: 'Appendices',
 					items: [
 						{ label: 'A: Elliptic Curve Taxonomy', slug: 'appendix/elliptic-curves' },
+						{ label: 'B: Advanced Blockchain Concepts', slug: 'appendix/advanced-blockchain' },
+						{ label: 'C: Instruction Set Reference', slug: 'appendix/instruction-set' },
 					],
 				},
 			],

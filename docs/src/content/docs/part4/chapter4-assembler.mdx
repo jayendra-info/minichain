@@ -184,178 +184,131 @@ main:
 
 ## 4.2 Instruction Reference
 
-This section provides a comprehensive reference for all VM opcodes. Each instruction shows its syntax, effect on VM state, and gas cost.
+The assembler compiles assembly mnemonics into the VM's 50-instruction set. This section provides a quick overview of the instructions available for assembly programming.
 
-### Control Flow Instructions
+<Aside type="note" title="Complete Instruction Set Reference">
+For comprehensive documentation including all instructions, syntax, effects, gas costs, and examples, see [Appendix C: Complete Instruction Set Reference](/appendix/instruction-set).
 
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `HALT` | `HALT` | Stop execution successfully | 0 |
-| `NOP` | `NOP` | Do nothing (no operation) | 0 |
-| `JUMP` | `JUMP Rtarget` | Unconditional jump: `PC = R[target]` | 8 |
-| `JUMPI` | `JUMPI Rcond, Rtarget` | Conditional jump: if `R[cond] != 0`, `PC = R[target]` | 8 |
-| `CALL` | `CALL Rtarget` | Call subroutine: push return address to R14, jump to `R[target]` | 700 |
-| `RET` | `RET` | Return from subroutine: jump to address in R14 | 8 |
-| `REVERT` | `REVERT` | Abort execution with error | 0 |
-
-<Aside type="tip" title="Jump Pattern">
-To jump to a label, you must first load its address into a register:
-
-```asm
-loop_start:
-    ; ... code ...
-    LOADI R5, loop_start   ; Load label address into R5
-    JUMP R5                ; Jump to that address
-```
-
-The assembler will replace `loop_start` in the `LOADI` with the actual bytecode address during compilation.
+For VM implementation details, see [Chapter 3, Section 3.3](/part3/chapter3-vm#33-opcode-definitions).
 </Aside>
 
-### Arithmetic Instructions
+### Instruction Categories
 
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `ADD` | `ADD Rdst, Rs1, Rs2` | `R[dst] = R[s1] + R[s2]` (wrapping) | 2 |
-| `SUB` | `SUB Rdst, Rs1, Rs2` | `R[dst] = R[s1] - R[s2]` (wrapping) | 2 |
-| `MUL` | `MUL Rdst, Rs1, Rs2` | `R[dst] = R[s1] * R[s2]` (wrapping) | 3 |
-| `DIV` | `DIV Rdst, Rs1, Rs2` | `R[dst] = R[s1] / R[s2]` (unsigned, traps if Rs2 = 0) | 5 |
-| `MOD` | `MOD Rdst, Rs1, Rs2` | `R[dst] = R[s1] % R[s2]` (unsigned modulo) | 5 |
-| `ADDI` | `ADDI Rdst, Rsrc, imm` | `R[dst] = R[src] + imm` (add immediate) | 2 |
+The VM supports 50 instructions across 9 categories:
 
-<Aside type="caution" title="Division by Zero">
-DIV and MOD will **trap** (halt execution with an error) if the divisor is zero. Always validate divisors before division:
+| Category | Instructions | Purpose | Example |
+|----------|--------------|---------|---------|
+| **Control Flow** | HALT, JUMP, JUMPI, CALL, RET, REVERT | Program control | `JUMPI R5, loop_start` |
+| **Arithmetic** | ADD, SUB, MUL, DIV, MOD, ADDI | Math operations | `ADD R0, R1, R2` |
+| **Bitwise** | AND, OR, XOR, NOT, SHL, SHR | Bit manipulation | `AND R3, R4, R5` |
+| **Comparison** | EQ, NE, LT, GT, LE, GE, ISZERO | Value comparison | `LT R6, R0, R1` |
+| **Memory** | LOAD8, LOAD64, STORE8, STORE64, MSIZE, MCOPY | RAM (temporary) | `LOAD64 R0, R1` |
+| **Storage** | SLOAD, SSTORE | Disk (persistent) | `SSTORE R0, R1` |
+| **Immediate** | LOADI, MOV | Constants & copy | `LOADI R0, 12345` |
+| **Context** | CALLER, ADDRESS, TIMESTAMP, etc. | Execution info | `CALLER R0` |
+| **Debug** | LOG | Debugging output | `LOG R0` |
 
+### Common Assembly Patterns
+
+**Counter (most common smart contract):**
 ```asm
-ISZERO R2, R1        ; Check if R1 == 0
-JUMPI R2, error      ; If zero, jump to error handler
-DIV R3, R0, R1       ; Safe division
+.entry main
+
+main:
+    LOADI R0, 0          ; Storage key 0
+    SLOAD R1, R0         ; Load counter
+    LOADI R2, 1          ; Constant 1
+    ADD R1, R1, R2       ; Increment
+    SSTORE R0, R1        ; Save back
+    HALT
 ```
-</Aside>
 
-### Bitwise Instructions
-
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `AND` | `AND Rdst, Rs1, Rs2` | `R[dst] = R[s1] & R[s2]` (bitwise AND) | 2 |
-| `OR` | `OR Rdst, Rs1, Rs2` | `R[dst] = R[s1] \| R[s2]` (bitwise OR) | 2 |
-| `XOR` | `XOR Rdst, Rs1, Rs2` | `R[dst] = R[s1] ^ R[s2]` (bitwise XOR) | 2 |
-| `NOT` | `NOT Rdst, Rsrc` | `R[dst] = ~R[src]` (bitwise NOT) | 2 |
-| `SHL` | `SHL Rdst, Rs1, Rs2` | `R[dst] = R[s1] << R[s2]` (logical left shift) | 5 |
-| `SHR` | `SHR Rdst, Rs1, Rs2` | `R[dst] = R[s1] >> R[s2]` (logical right shift) | 5 |
-
-### Comparison Instructions
-
-These instructions set the destination register to 1 (true) or 0 (false):
-
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `EQ` | `EQ Rdst, Rs1, Rs2` | `R[dst] = (R[s1] == R[s2]) ? 1 : 0` | 3 |
-| `NE` | `NE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] != R[s2]) ? 1 : 0` | 3 |
-| `LT` | `LT Rdst, Rs1, Rs2` | `R[dst] = (R[s1] < R[s2]) ? 1 : 0` (unsigned) | 3 |
-| `GT` | `GT Rdst, Rs1, Rs2` | `R[dst] = (R[s1] > R[s2]) ? 1 : 0` (unsigned) | 3 |
-| `LE` | `LE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] <= R[s2]) ? 1 : 0` | 3 |
-| `GE` | `GE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] >= R[s2]) ? 1 : 0` | 3 |
-| `ISZERO` | `ISZERO Rdst, Rsrc` | `R[dst] = (R[src] == 0) ? 1 : 0` | 3 |
-
-<Aside type="tip" title="Using Comparisons with JUMPI">
-Comparison instructions are designed to work with conditional jumps:
-
+**Access control:**
 ```asm
-LT R5, R0, R1        ; R5 = (R0 < R1)
-JUMPI R5, less_than  ; Jump if R0 < R1
-; ... R0 >= R1 case ...
+check_owner:
+    CALLER R0            ; Get caller address
+    LOADI R1, 0xOWNER    ; Load expected owner
+    EQ R2, R0, R1        ; Compare
+    JUMPI R2, authorized ; If equal, continue
+    REVERT               ; Otherwise, abort
+authorized:
+    ; ... privileged code ...
+```
+
+**If-then-else:**
+```asm
+    LT R5, R0, R1        ; R5 = (R0 < R1)
+    JUMPI R5, less_than  ; if true, jump
+    ; ... R0 >= R1 case ...
+    JUMP done
 less_than:
-; ... R0 < R1 case ...
+    ; ... R0 < R1 case ...
+done:
 ```
-</Aside>
 
-### Memory Instructions (RAM Operations)
+**While loop:**
+```asm
+loop:
+    LT R5, R0, R10       ; R5 = (R0 < R10)
+    ISZERO R6, R5        ; R6 = !R5
+    JUMPI R6, end        ; if !(R0 < R10), break
+    ; ... loop body ...
+    JUMP loop
+end:
+```
 
-These instructions access temporary linear memory (like RAM on a computer). Memory is fast and cheap, but data is **lost when execution ends**.
+### Key Design Choices
 
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `LOAD8` | `LOAD8 Rdst, Raddr` | `R[dst] = Memory[R[addr]]` (1 byte) | 3 |
-| `LOAD64` | `LOAD64 Rdst, Raddr` | `R[dst] = Memory[R[addr]]` (8 bytes, little-endian) | 3 |
-| `STORE8` | `STORE8 Raddr, Rsrc` | `Memory[R[addr]] = R[src]` (1 byte) | 3 |
-| `STORE64` | `STORE64 Raddr, Rsrc` | `Memory[R[addr]] = R[src]` (8 bytes, little-endian) | 3 |
-| `MSIZE` | `MSIZE Rdst` | `R[dst] = size of memory in bytes` | 2 |
-| `MCOPY` | `MCOPY Rdst, Rsrc, Rlen` | `memcpy(R[dst], R[src], R[len])` | 3 + len |
+**Register-based vs Stack-based:**
+- **Minichain** uses registers (like x86, ARM)
+- **Ethereum** uses a stack (like JVM, Forth)
 
-### Storage Instructions (Disk Operations)
-
-These instructions access persistent contract storage (like a hard drive). Storage is slow and expensive, but data **persists across transactions**.
-
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `SLOAD` | `SLOAD Rdst, Rkey` | `R[dst] = Storage[R[key]]` (persistent, 32-byte slot) | 100 |
-| `SSTORE` | `SSTORE Rkey, Rvalue` | `Storage[R[key]] = R[value]` (persistent, 32-byte slot) | 5,000 (reset) or 20,000 (set) |
-
-<Aside type="tip" title="Memory vs Storage: RAM vs Disk">
-**Critical distinction:**
-
-| Aspect | Memory (RAM) | Storage (Disk) |
-|--------|-------------|----------------|
-| **Persistence** | Temporary — cleared after execution | Permanent — survives across transactions |
-| **Speed** | Fast (in-memory array) | Slow (database read/write) |
-| **Cost** | Cheap (~3 gas per operation) | Expensive (~100 gas read, ~5,000-20,000 gas write) |
-| **Use Case** | Temporary computation, buffers, local variables | Contract state, balances, ownership records |
-
-**Example: Calculating a sum**
+**Advantage:** Registers produce more compact bytecode. Compare:
 
 ```asm
-; Temporary calculation (use Memory - RAM)
-LOADI R0, 100        ; First number
-LOADI R1, 0          ; Memory address 0
-STORE64 R1, R0       ; Store to temporary memory (3 gas)
+; Register-based (Minichain): 3 instructions
+ADD R0, R1, R2    ; R0 = R1 + R2
+SUB R3, R0, R4    ; R3 = R0 - R4
+MUL R5, R3, R6    ; R5 = R3 * R6
 
-; Permanent state (use Storage - Disk)
-LOADI R2, 0          ; Storage key 0
-SLOAD R3, R2         ; Load previous total from disk (100 gas)
-ADD R3, R3, R0       ; Add to it (2 gas)
-SSTORE R2, R3        ; Save back to disk (5000 gas) - persists!
+; Stack-based (EVM): 8 instructions
+PUSH R1           ; Stack: [R1]
+PUSH R2           ; Stack: [R1, R2]
+ADD               ; Stack: [R1+R2]
+PUSH R4           ; Stack: [R1+R2, R4]
+SUB               ; Stack: [(R1+R2)-R4]
+PUSH R6           ; Stack: [result, R6]
+MUL               ; Stack: [result*R6]
+POP R5            ; Save to R5
 ```
 
-This separation mirrors how real computers work: fast volatile RAM for active computation, slow persistent disk for data that must survive.
-</Aside>
+**Memory vs Storage:**
+- **Memory** (RAM): Temporary, cheap (~3 gas), cleared after execution
+- **Storage** (Disk): Persistent, expensive (~5,000-20,000 gas), survives across transactions
 
-### Immediate Instructions
+Use Memory for computation, Storage for state that must persist.
 
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `LOADI` | `LOADI Rdst, imm64` | `R[dst] = imm64` (load 64-bit constant) | 2 |
-| `MOV` | `MOV Rdst, Rsrc` | `R[dst] = R[src]` (register copy) | 2 |
-
-### Context Instructions
-
-These instructions provide information about the execution context:
-
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `CALLER` | `CALLER Rdst` | `R[dst] = caller's address` (as u64, truncated) | 2 |
-| `CALLVALUE` | `CALLVALUE Rdst` | `R[dst] = value sent with this call` | 2 |
-| `ADDRESS` | `ADDRESS Rdst` | `R[dst] = this contract's address` | 2 |
-| `BLOCKNUMBER` | `BLOCKNUMBER Rdst` | `R[dst] = current block number` | 2 |
-| `TIMESTAMP` | `TIMESTAMP Rdst` | `R[dst] = current block timestamp` | 2 |
-| `GAS` | `GAS Rdst` | `R[dst] = remaining gas` | 2 |
-
-<Aside type="note">
-Context instructions are useful for access control and time-based logic:
+### Assembly Syntax Basics
 
 ```asm
-CALLER R0            ; Who is calling this contract?
-LOADI R1, 0xABCD...  ; Expected owner address
-EQ R2, R0, R1        ; Is caller == owner?
-JUMPI R2, authorized ; If yes, proceed
-REVERT               ; Otherwise, abort
+; Comments start with semicolon
+
+.entry main          ; Entry point directive
+
+main:                ; Label definition
+    LOADI R0, 100    ; Load immediate: R0 = 100
+    LOADI R1, 200    ; R1 = 200
+    ADD R2, R0, R1   ; R2 = R0 + R1 = 300
+    LOG R2           ; Output R2 for debugging
+    HALT             ; Stop execution
+
+; Registers: R0-R15 (16 general-purpose 64-bit registers)
+; Special: R14 used by CALL/RET for return address
 ```
+
+<Aside type="tip">
+**For detailed instruction documentation** including all syntax variations, gas costs, usage examples, and gotchas, see [Appendix C: Complete Instruction Set Reference](/appendix/instruction-set).
 </Aside>
-
-### Debug Instructions
-
-| Instruction | Syntax | Effect | Gas Cost |
-|------------|--------|--------|----------|
-| `LOG` | `LOG Rsrc` | Log `R[src]` value (for debugging, appears in execution trace) | 2 |
 
 ---
 

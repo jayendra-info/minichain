@@ -1,0 +1,460 @@
+---
+title: "Appendix C: Complete Instruction Set Reference"
+description: Comprehensive reference for all Minichain VM opcodes with syntax, examples, and gas costs
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Introduction
+
+This appendix provides the complete instruction set reference for the Minichain virtual machine. Each instruction includes:
+
+- **Opcode number** (hexadecimal byte value)
+- **Assembly syntax** (how to write it in assembly code)
+- **Effect** (what it does to VM state)
+- **Gas cost** (computational cost)
+- **Usage examples and tips**
+
+<Aside type="note">
+**For implementation details:**
+- VM implementation: See [Chapter 3: Register-Based VM](/part3/chapter3-vm)
+- Assembler implementation: See [Chapter 4: Assembly to Bytecode](/part4/chapter4-assembler)
+</Aside>
+
+---
+
+## C.1 Control Flow Instructions
+
+Control the program counter and execution flow.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x00` | `HALT` | `HALT` | Stop execution successfully | 0 |
+| `0x01` | `NOP` | `NOP` | Do nothing (no operation) | 0 |
+| `0x02` | `JUMP` | `JUMP Rtarget` | Unconditional jump: `PC = R[target]` | 8 |
+| `0x03` | `JUMPI` | `JUMPI Rcond, Rtarget` | Conditional jump: if `R[cond] != 0`, `PC = R[target]` | 8 |
+| `0x04` | `CALL` | `CALL Rtarget` | Call subroutine: push return address to R14, jump to `R[target]` | 700 |
+| `0x05` | `RET` | `RET` | Return from subroutine: jump to address in R14 | 8 |
+| `0x0F` | `REVERT` | `REVERT` | Abort execution with error | 0 |
+
+<Aside type="tip" title="Jump Pattern">
+To jump to a label, you must first load its address into a register:
+
+```asm
+loop_start:
+    ; ... code ...
+    LOADI R5, loop_start   ; Load label address into R5
+    JUMP R5                ; Jump to that address
+```
+
+The assembler will replace `loop_start` in the `LOADI` with the actual bytecode address during compilation.
+</Aside>
+
+---
+
+## C.2 Arithmetic Instructions
+
+Perform mathematical operations on register values.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x10` | `ADD` | `ADD Rdst, Rs1, Rs2` | `R[dst] = R[s1] + R[s2]` (wrapping) | 2 |
+| `0x11` | `SUB` | `SUB Rdst, Rs1, Rs2` | `R[dst] = R[s1] - R[s2]` (wrapping) | 2 |
+| `0x12` | `MUL` | `MUL Rdst, Rs1, Rs2` | `R[dst] = R[s1] * R[s2]` (wrapping) | 3 |
+| `0x13` | `DIV` | `DIV Rdst, Rs1, Rs2` | `R[dst] = R[s1] / R[s2]` (unsigned, traps if Rs2 = 0) | 5 |
+| `0x14` | `MOD` | `MOD Rdst, Rs1, Rs2` | `R[dst] = R[s1] % R[s2]` (unsigned modulo) | 5 |
+| `0x15` | `ADDI` | `ADDI Rdst, Rsrc, imm` | `R[dst] = R[src] + imm` (add immediate) | 2 |
+
+<Aside type="caution" title="Division by Zero">
+DIV and MOD will **trap** (halt execution with an error) if the divisor is zero. Always validate divisors before division:
+
+```asm
+ISZERO R2, R1        ; Check if R1 == 0
+JUMPI R2, error      ; If zero, jump to error handler
+DIV R3, R0, R1       ; Safe division
+```
+</Aside>
+
+<Aside type="note" title="Overflow Behavior">
+ADD, SUB, and MUL use **wrapping arithmetic**: overflow wraps around instead of trapping.
+
+Example: `255 + 1 = 0` (wraps at 8-bit boundary for demonstration; actual VM uses 64-bit wrapping)
+</Aside>
+
+---
+
+## C.3 Bitwise Instructions
+
+Perform bit-level operations.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x20` | `AND` | `AND Rdst, Rs1, Rs2` | `R[dst] = R[s1] & R[s2]` (bitwise AND) | 2 |
+| `0x21` | `OR` | `OR Rdst, Rs1, Rs2` | `R[dst] = R[s1] \| R[s2]` (bitwise OR) | 2 |
+| `0x22` | `XOR` | `XOR Rdst, Rs1, Rs2` | `R[dst] = R[s1] ^ R[s2]` (bitwise XOR) | 2 |
+| `0x23` | `NOT` | `NOT Rdst, Rsrc` | `R[dst] = ~R[src]` (bitwise NOT) | 2 |
+| `0x24` | `SHL` | `SHL Rdst, Rs1, Rs2` | `R[dst] = R[s1] << R[s2]` (logical left shift) | 5 |
+| `0x25` | `SHR` | `SHR Rdst, Rs1, Rs2` | `R[dst] = R[s1] >> R[s2]` (logical right shift) | 5 |
+
+<Aside type="tip" title="Bitwise Tricks">
+Common patterns using bitwise operations:
+
+```asm
+; Check if bit N is set: value & (1 << N)
+LOADI R0, 1
+SHL R0, R0, R1       ; R0 = 1 << N
+AND R2, R3, R0       ; R2 = value & (1 << N)
+
+; Toggle bit N: value ^ (1 << N)
+LOADI R0, 1
+SHL R0, R0, R1       ; R0 = 1 << N
+XOR R3, R3, R0       ; value ^= (1 << N)
+
+; Multiply/divide by powers of 2 (faster than MUL/DIV)
+SHL R0, R0, R1       ; R0 = R0 * (2^R1)
+SHR R0, R0, R1       ; R0 = R0 / (2^R1)
+```
+</Aside>
+
+---
+
+## C.4 Comparison Instructions
+
+Compare values and produce boolean results (1 for true, 0 for false).
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x30` | `EQ` | `EQ Rdst, Rs1, Rs2` | `R[dst] = (R[s1] == R[s2]) ? 1 : 0` | 3 |
+| `0x31` | `NE` | `NE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] != R[s2]) ? 1 : 0` | 3 |
+| `0x32` | `LT` | `LT Rdst, Rs1, Rs2` | `R[dst] = (R[s1] < R[s2]) ? 1 : 0` (unsigned) | 3 |
+| `0x33` | `GT` | `GT Rdst, Rs1, Rs2` | `R[dst] = (R[s1] > R[s2]) ? 1 : 0` (unsigned) | 3 |
+| `0x34` | `LE` | `LE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] <= R[s2]) ? 1 : 0` | 3 |
+| `0x35` | `GE` | `GE Rdst, Rs1, Rs2` | `R[dst] = (R[s1] >= R[s2]) ? 1 : 0` | 3 |
+| `0x36` | `ISZERO` | `ISZERO Rdst, Rsrc` | `R[dst] = (R[src] == 0) ? 1 : 0` | 3 |
+
+<Aside type="tip" title="Using Comparisons with JUMPI">
+Comparison instructions are designed to work with conditional jumps:
+
+```asm
+LT R5, R0, R1        ; R5 = (R0 < R1)
+JUMPI R5, less_than  ; Jump if R0 < R1
+; ... R0 >= R1 case ...
+less_than:
+; ... R0 < R1 case ...
+```
+
+Common patterns:
+
+```asm
+; If-then-else pattern
+EQ R2, R0, R1        ; R2 = (R0 == R1)
+JUMPI R2, equal      ; if equal, jump
+; ... not equal code ...
+JUMP done
+equal:
+; ... equal code ...
+done:
+
+; While loop pattern
+loop:
+    LT R5, R0, R1    ; R5 = (R0 < R1)
+    ISZERO R6, R5    ; R6 = !(R0 < R1)
+    JUMPI R6, end    ; if !(R0 < R1), break
+    ; ... loop body ...
+    JUMP loop
+end:
+```
+</Aside>
+
+---
+
+## C.5 Memory Instructions (RAM Operations)
+
+Access temporary linear memory. Memory is fast and cheap, but **data is lost when execution ends**.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x40` | `LOAD8` | `LOAD8 Rdst, Raddr` | `R[dst] = Memory[R[addr]]` (1 byte) | 3 |
+| `0x41` | `LOAD64` | `LOAD64 Rdst, Raddr` | `R[dst] = Memory[R[addr]]` (8 bytes, little-endian) | 3 |
+| `0x42` | `STORE8` | `STORE8 Raddr, Rsrc` | `Memory[R[addr]] = R[src]` (1 byte) | 3 |
+| `0x43` | `STORE64` | `STORE64 Raddr, Rsrc` | `Memory[R[addr]] = R[src]` (8 bytes, little-endian) | 3 |
+| `0x44` | `MSIZE` | `MSIZE Rdst` | `R[dst] = size of memory in bytes` | 2 |
+| `0x45` | `MCOPY` | `MCOPY Rdst, Rsrc, Rlen` | `memcpy(R[dst], R[src], R[len])` | 3 + len |
+
+<Aside type="note" title="Memory Layout">
+Memory is a linear byte array that grows on demand:
+
+```
+Address:  0    1    2    3    4    5    6    7    8    9   ...
+Value:   [00] [00] [00] [00] [00] [00] [00] [00] [00] [00] ...
+```
+
+**LOAD64/STORE64** use little-endian encoding:
+- Value `0x0102030405060708` at address 0:
+  - Memory[0] = 0x08 (least significant byte)
+  - Memory[7] = 0x01 (most significant byte)
+</Aside>
+
+---
+
+## C.6 Storage Instructions (Disk Operations)
+
+Access persistent contract storage. Storage is slow and expensive, but **data persists across transactions**.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x50` | `SLOAD` | `SLOAD Rdst, Rkey` | `R[dst] = Storage[R[key]]` (persistent, 32-byte slot) | 100 |
+| `0x51` | `SSTORE` | `SSTORE Rkey, Rvalue` | `Storage[R[key]] = R[value]` (persistent, 32-byte slot) | 5,000 or 20,000 |
+
+<Aside type="caution" title="Storage Gas Costs">
+SSTORE has variable costs:
+- **5,000 gas**: Resetting an existing slot (changing non-zero to different non-zero)
+- **20,000 gas**: Setting a new slot (changing zero to non-zero)
+- **Refund**: Clearing a slot (non-zero to zero) gives a gas refund
+
+Always minimize storage writes in production contracts.
+</Aside>
+
+<Aside type="tip" title="Memory vs Storage: RAM vs Disk">
+**Critical distinction:**
+
+| Aspect | Memory (RAM) | Storage (Disk) |
+|--------|-------------|----------------|
+| **Persistence** | Temporary — cleared after execution | Permanent — survives across transactions |
+| **Speed** | Fast (in-memory array) | Slow (database read/write) |
+| **Cost** | Cheap (~3 gas per operation) | Expensive (~100 gas read, ~5,000-20,000 gas write) |
+| **Use Case** | Temporary computation, buffers, local variables | Contract state, balances, ownership records |
+
+**Example: Calculating a sum**
+
+```asm
+; Temporary calculation (use Memory - RAM)
+LOADI R0, 100        ; First number
+LOADI R1, 0          ; Memory address 0
+STORE64 R1, R0       ; Store to temporary memory (3 gas)
+
+; Permanent state (use Storage - Disk)
+LOADI R2, 0          ; Storage key 0
+SLOAD R3, R2         ; Load previous total from disk (100 gas)
+ADD R3, R3, R0       ; Add to it (2 gas)
+SSTORE R2, R3        ; Save back to disk (5000 gas) - persists!
+```
+
+This separation mirrors how real computers work: fast volatile RAM for active computation, slow persistent disk for data that must survive.
+</Aside>
+
+---
+
+## C.7 Immediate Instructions
+
+Load constants and move data between registers.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x70` | `LOADI` | `LOADI Rdst, imm64` | `R[dst] = imm64` (load 64-bit constant) | 2 |
+| `0x71` | `MOV` | `MOV Rdst, Rsrc` | `R[dst] = R[src]` (register copy) | 2 |
+
+<Aside type="note">
+**LOADI encoding**: This is the only instruction with a 64-bit immediate operand:
+
+```
+Bytes:  [opcode] [dst_reg] [imm byte 0] ... [imm byte 7]
+Size:   1 byte + 1 byte  +     8 bytes          = 10 bytes
+```
+
+Example: `LOADI R0, 12345` encodes as 10 bytes total.
+</Aside>
+
+---
+
+## C.8 Context Instructions
+
+Query the execution environment and blockchain state.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0x80` | `CALLER` | `CALLER Rdst` | `R[dst] = caller's address` (as u64, truncated) | 2 |
+| `0x81` | `CALLVALUE` | `CALLVALUE Rdst` | `R[dst] = value sent with this call` | 2 |
+| `0x82` | `ADDRESS` | `ADDRESS Rdst` | `R[dst] = this contract's address` | 2 |
+| `0x83` | `BLOCKNUMBER` | `BLOCKNUMBER Rdst` | `R[dst] = current block number` | 2 |
+| `0x84` | `TIMESTAMP` | `TIMESTAMP Rdst` | `R[dst] = current block timestamp` | 2 |
+| `0x85` | `GAS` | `GAS Rdst` | `R[dst] = remaining gas` | 2 |
+
+<Aside type="tip" title="Access Control Pattern">
+Context instructions are useful for access control and time-based logic:
+
+```asm
+; Check if caller is owner
+CALLER R0            ; Who is calling this contract?
+LOADI R1, 0xABCD...  ; Expected owner address
+EQ R2, R0, R1        ; Is caller == owner?
+JUMPI R2, authorized ; If yes, proceed
+REVERT               ; Otherwise, abort
+
+authorized:
+; ... privileged code ...
+```
+
+**Time-based logic:**
+
+```asm
+TIMESTAMP R0         ; Get current timestamp
+LOADI R1, 1704067200 ; Target timestamp
+LT R2, R0, R1        ; Is current < target?
+JUMPI R2, too_early  ; If yes, reject
+; ... proceed ...
+```
+</Aside>
+
+---
+
+## C.9 Debug Instructions
+
+Output values for debugging and logging.
+
+| Opcode | Instruction | Syntax | Effect | Gas |
+|--------|-------------|--------|--------|-----|
+| `0xF0` | `LOG` | `LOG Rsrc` | Log `R[src]` value (appears in execution trace) | 2 |
+
+<Aside type="note">
+**LOG** is primarily for debugging during development. In production smart contracts, you'd typically use event logs (stored in transaction receipts) instead. See [Appendix B: Advanced Blockchain Concepts](/appendix/advanced-blockchain#b2-transaction-receipts) for event log implementation.
+</Aside>
+
+---
+
+## C.10 Quick Reference Table
+
+Complete opcode listing sorted by category and number:
+
+### Control Flow (0x00-0x0F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x00 | HALT | 0 |
+| 0x01 | NOP | 0 |
+| 0x02 | JUMP | 8 |
+| 0x03 | JUMPI | 8 |
+| 0x04 | CALL | 700 |
+| 0x05 | RET | 8 |
+| 0x0F | REVERT | 0 |
+
+### Arithmetic (0x10-0x1F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x10 | ADD | 2 |
+| 0x11 | SUB | 2 |
+| 0x12 | MUL | 3 |
+| 0x13 | DIV | 5 |
+| 0x14 | MOD | 5 |
+| 0x15 | ADDI | 2 |
+
+### Bitwise (0x20-0x2F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x20 | AND | 2 |
+| 0x21 | OR | 2 |
+| 0x22 | XOR | 2 |
+| 0x23 | NOT | 2 |
+| 0x24 | SHL | 5 |
+| 0x25 | SHR | 5 |
+
+### Comparison (0x30-0x3F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x30 | EQ | 3 |
+| 0x31 | NE | 3 |
+| 0x32 | LT | 3 |
+| 0x33 | GT | 3 |
+| 0x34 | LE | 3 |
+| 0x35 | GE | 3 |
+| 0x36 | ISZERO | 3 |
+
+### Memory (0x40-0x4F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x40 | LOAD8 | 3 |
+| 0x41 | LOAD64 | 3 |
+| 0x42 | STORE8 | 3 |
+| 0x43 | STORE64 | 3 |
+| 0x44 | MSIZE | 2 |
+| 0x45 | MCOPY | 3+N |
+
+### Storage (0x50-0x5F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x50 | SLOAD | 100 |
+| 0x51 | SSTORE | 5K-20K |
+
+### Immediate (0x70-0x7F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x70 | LOADI | 2 |
+| 0x71 | MOV | 2 |
+
+### Context (0x80-0x8F)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0x80 | CALLER | 2 |
+| 0x81 | CALLVALUE | 2 |
+| 0x82 | ADDRESS | 2 |
+| 0x83 | BLOCKNUMBER | 2 |
+| 0x84 | TIMESTAMP | 2 |
+| 0x85 | GAS | 2 |
+
+### Debug (0xF0-0xFF)
+| Opcode | Mnemonic | Gas |
+|--------|----------|-----|
+| 0xF0 | LOG | 2 |
+
+---
+
+## Summary
+
+The Minichain VM instruction set includes:
+
+- **50 instructions** across 9 categories
+- **Simple encoding** (1-10 bytes per instruction)
+- **Register-based** (16 general-purpose registers)
+- **Gas metered** (prevents infinite loops)
+- **Memory + Storage** (RAM vs Disk model)
+
+### Design Philosophy
+
+1. **Minimal but complete**: Only essential instructions, no redundancy
+2. **Ethereum-inspired**: Familiar to Solidity/EVM developers
+3. **Register-based**: More efficient than stack-based (fewer instructions needed)
+4. **Learning-focused**: Simple enough to understand completely
+
+### Key Patterns
+
+**Counter pattern** (most common smart contract):
+```asm
+LOADI R0, 0          ; Storage key 0
+SLOAD R1, R0         ; Load counter
+LOADI R2, 1          ; Constant 1
+ADD R1, R1, R2       ; Increment
+SSTORE R0, R1        ; Save back
+```
+
+**Access control pattern**:
+```asm
+CALLER R0            ; Get caller
+LOADI R1, OWNER_ADDR ; Load owner
+EQ R2, R0, R1        ; Check equality
+JUMPI R2, authorized ; If equal, continue
+REVERT               ; Otherwise, abort
+```
+
+**Loop pattern**:
+```asm
+loop:
+    ; ... loop body ...
+    LT R5, R0, R10   ; R0 < R10?
+    JUMPI R5, loop   ; If yes, continue
+    ; ... after loop ...
+```
+
+---
+
+For implementation details, see:
+- [Chapter 3: Register-Based VM](/part3/chapter3-vm) - VM implementation
+- [Chapter 4: Assembly to Bytecode](/part4/chapter4-assembler) - Assembler implementation
