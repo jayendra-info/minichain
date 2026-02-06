@@ -244,7 +244,7 @@ Both crates are maintained by respected cryptography teams and widely used in pr
 <Aside type="tip" title="Want to learn more about elliptic curves?">
 This section compares Ed25519 and secp256k1, but there's a whole landscape of elliptic curve families (Montgomery, Edwards, Weierstrass, pairing-friendly) each optimized for different use cases.
 
-**See [Appendix A: Elliptic Curve Taxonomy](/appendix/elliptic-curves)** for a comprehensive guide covering:
+**See [Appendix A: Elliptic Curve Taxonomy](/minichain/appendix/elliptic-curves)** for a comprehensive guide covering:
 - Four major curve families and their mathematical properties
 - Why Montgomery curves (X25519) are perfect for key exchange
 - How pairing-friendly curves (BLS12-381) enable signature aggregation & zero-knowledge proofs
@@ -1005,7 +1005,7 @@ Look up Alice in current state trie → verify proof against state_root
 
 The entire history is "compressed" into the latest state. You don't trace back — you look up directly.
 
-We'll explore the state trie implementation in [Chapter 2: Storage](/part2/chapter2-storage).
+We'll explore the state trie implementation in [Chapter 2: Storage](/minichain/part2/chapter2-storage).
 
 ---
 
@@ -1033,7 +1033,7 @@ Even here, you *could* derive author from `height % num_authorities`. But explic
 
 **Also: Ed25519 requires it.** Unlike secp256k1 (Ethereum), you can't recover the public key from an Ed25519 signature. So we need `author` to look up the correct public key for verification. (See [Why Ed25519 Over secp256k1?](#why-ed25519-over-secp256k1) for a detailed comparison.)
 
-We'll decide between single vs rotating authorities when implementing the consensus layer in [Chapter 5](/part5/chapter5-chain).
+We'll decide between single vs rotating authorities when implementing the consensus layer in [Chapter 5](/minichain/part5/chapter5-chain).
 
 ---
 
@@ -1060,7 +1060,7 @@ Some PoA chains repurpose `difficulty`:
 | **Clique (Geth)** | `2` = in-turn validator, `1` = out-of-turn (helps fork choice) |
 | **Aura (Parity)** | Step number in rotation |
 
-**For minichain:** We keep them as placeholders for now. A truly minimal PoA chain could remove both — we may do so once we finalize the consensus design in [Chapter 5](/part5/chapter5-chain).
+**For minichain:** We keep them as placeholders for now. A truly minimal PoA chain could remove both — we may do so once we finalize the consensus design in [Chapter 5](/minichain/part5/chapter5-chain).
 
 ---
 
@@ -1155,7 +1155,7 @@ Block interval = 12 seconds
 
 **Without a mempool:** You'd need to produce a block for every single transaction — no batching, no prioritization, extremely inefficient.
 
-We'll implement the mempool in [Chapter 5](/part5/chapter5-chain) as part of the chain orchestration layer.
+We'll implement the mempool in [Chapter 5](/minichain/part5/chapter5-chain) as part of the chain orchestration layer.
 </Aside>
 
 <Aside type="tip">
@@ -1356,4 +1356,4 @@ test merkle::tests::test_merkle_proof_valid ... ok
 
 ## What's Next?
 
-With our primitives in place, we're ready to build the **storage layer** in [Chapter 2](/part2/chapter2-storage), where we'll persist accounts, blocks, and contract state using sled.
+With our primitives in place, we're ready to build the **storage layer** in [Chapter 2](/minichain/part2/chapter2-storage), where we'll persist accounts, blocks, and contract state using sled.

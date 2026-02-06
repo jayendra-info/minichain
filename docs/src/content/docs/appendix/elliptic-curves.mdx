@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 This appendix provides a comprehensive overview of elliptic curve families used in cryptography, explaining the connection between mathematical properties, algorithmic consequences, and practical utility.
 
 <Aside type="tip">
-**For Chapter 1 readers:** This appendix expands on the [Ed25519 vs secp256k1 comparison](/part1/chapter1-core#why-ed25519-over-secp256k1) by exploring the broader landscape of elliptic curve cryptography.
+**For Chapter 1 readers:** This appendix expands on the [Ed25519 vs secp256k1 comparison](/minichain/part1/chapter1-core#why-ed25519-over-secp256k1) by exploring the broader landscape of elliptic curve cryptography.
 </Aside>
 
 ---
@@ -1043,9 +1043,9 @@ Think of curve families as **APIs shaped by algebra**:
 
 ### Minichain Documentation
 
-- [Ed25519 vs secp256k1 comparison](/part1/chapter1-core#why-ed25519-over-secp256k1) — Why Minichain uses Ed25519
-- [Cryptographic Identities](/part1/chapter1-core#12-cryptographic-identities) — How addresses are derived
-- [Transaction Signing](/part1/chapter1-core#signing-transactions) — Signature implementation details
+- [Ed25519 vs secp256k1 comparison](/minichain/part1/chapter1-core#why-ed25519-over-secp256k1) — Why Minichain uses Ed25519
+- [Cryptographic Identities](/minichain/part1/chapter1-core#12-cryptographic-identities) — How addresses are derived
+- [Transaction Signing](/minichain/part1/chapter1-core#signing-transactions) — Signature implementation details
 
 ### Papers & Specifications
 
@@ -1068,7 +1068,7 @@ Think of curve families as **APIs shaped by algebra**:
 - Easy to implement correctly (~2k LOC)
 - Perfect for a learning blockchain
 
-See the [comparison section](/part1/chapter1-core#why-ed25519-over-secp256k1) for why this beats secp256k1 (Weierstrass/Koblitz family) for educational purposes.
+See the [comparison section](/minichain/part1/chapter1-core#why-ed25519-over-secp256k1) for why this beats secp256k1 (Weierstrass/Koblitz family) for educational purposes.
 
 If Minichain needed key exchange, we'd use X25519 (Montgomery family). If we needed signature aggregation, we'd use BLS12-381 (pairing-friendly family).
 </Aside>

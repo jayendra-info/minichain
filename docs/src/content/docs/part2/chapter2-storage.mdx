@@ -6,7 +6,7 @@ description: Building the storage layer with sled
 import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
 
 
-In [Chapter 1](/part1/chapter1-core), we built all our blockchain primitives in memory. But a blockchain that forgets everything when you restart it isn't very useful. In this chapter, we'll build the **storage layer** — the persistent backbone that remembers accounts, blocks, and contract state.
+In [Chapter 1](/minichain/part1/chapter1-core), we built all our blockchain primitives in memory. But a blockchain that forgets everything when you restart it isn't very useful. In this chapter, we'll build the **storage layer** — the persistent backbone that remembers accounts, blocks, and contract state.
 
 ## What We're Building
 
@@ -926,7 +926,7 @@ impl<'a> StateManager<'a> {
 ```
 
 <Aside type="note">
-SLOAD and SSTORE are the VM opcodes for storage access. We'll use these names in [Chapter 3](/part3/chapter3-vm) when implementing the virtual machine.
+SLOAD and SSTORE are the VM opcodes for storage access. We'll use these names in [Chapter 3](/minichain/part3/chapter3-vm) when implementing the virtual machine.
 </Aside>
 
 ---
@@ -937,7 +937,7 @@ The **state root** is a single hash that commits to the entire world state. It g
 
 ### Why State Roots Matter (Recap)
 
-From [Chapter 1](/part1/chapter1-core#state_root--world-state-commitment-and-the-need-of-it):
+From [Chapter 1](/minichain/part1/chapter1-core#state_root--world-state-commitment-and-the-need-of-it):
 
 | Use Case | How state_root Helps |
 |----------|---------------------|
@@ -1222,7 +1222,7 @@ test chain::tests::test_block_by_height ... ok
 
 ## What's Next?
 
-With persistence in place, we're ready to build the **virtual machine** in [Chapter 3](/part3/chapter3-vm). The VM will:
+With persistence in place, we're ready to build the **virtual machine** in [Chapter 3](/minichain/part3/chapter3-vm). The VM will:
 
 - Execute bytecode stored in contracts
 - Read/write to the storage layer via SLOAD/SSTORE

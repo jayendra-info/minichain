@@ -17,8 +17,8 @@ This appendix provides the complete instruction set reference for the Minichain 
 
 <Aside type="note">
 **For implementation details:**
-- VM implementation: See [Chapter 3: Register-Based VM](/part3/chapter3-vm)
-- Assembler implementation: See [Chapter 4: Assembly to Bytecode](/part4/chapter4-assembler)
+- VM implementation: See [Chapter 3: Register-Based VM](/minichain/part3/chapter3-vm)
+- Assembler implementation: See [Chapter 4: Assembly to Bytecode](/minichain/part4/chapter4-assembler)
 </Aside>
 
 ---
@@ -317,7 +317,7 @@ Output values for debugging and logging.
 | `0xF0` | `LOG` | `LOG Rsrc` | Log `R[src]` value (appears in execution trace) | 2 |
 
 <Aside type="note">
-**LOG** is primarily for debugging during development. In production smart contracts, you'd typically use event logs (stored in transaction receipts) instead. See [Appendix B: Advanced Blockchain Concepts](/appendix/advanced-blockchain#b2-transaction-receipts) for event log implementation.
+**LOG** is primarily for debugging during development. In production smart contracts, you'd typically use event logs (stored in transaction receipts) instead. See [Appendix B: Advanced Blockchain Concepts](/minichain/appendix/advanced-blockchain#b2-transaction-receipts) for event log implementation.
 </Aside>
 
 ---
@@ -456,5 +456,5 @@ loop:
 ---
 
 For implementation details, see:
-- [Chapter 3: Register-Based VM](/part3/chapter3-vm) - VM implementation
-- [Chapter 4: Assembly to Bytecode](/part4/chapter4-assembler) - Assembler implementation
+- [Chapter 3: Register-Based VM](/minichain/part3/chapter3-vm) - VM implementation
+- [Chapter 4: Assembly to Bytecode](/minichain/part4/chapter4-assembler) - Assembler implementation

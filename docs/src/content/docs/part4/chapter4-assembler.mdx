@@ -5,7 +5,7 @@ description: Building a human-readable assembly language and its compiler
 
 import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
 
-In [Chapter 3](/part3/chapter3-vm), we built a register-based virtual machine that executes bytecode. But writing raw bytecode is tedious and error-prone. Imagine debugging this:
+In [Chapter 3](/minichain/part3/chapter3-vm), we built a register-based virtual machine that executes bytecode. But writing raw bytecode is tedious and error-prone. Imagine debugging this:
 
 ```
 70 00 0A 00 00 00 00 00 00 00 70 10 14 00 00 00 00 00 00 00 10 20 10 F0 20 00
@@ -187,9 +187,9 @@ main:
 The assembler compiles assembly mnemonics into the VM's 50-instruction set. This section provides a quick overview of the instructions available for assembly programming.
 
 <Aside type="note" title="Complete Instruction Set Reference">
-For comprehensive documentation including all instructions, syntax, effects, gas costs, and examples, see [Appendix C: Complete Instruction Set Reference](/appendix/instruction-set).
+For comprehensive documentation including all instructions, syntax, effects, gas costs, and examples, see [Appendix C: Complete Instruction Set Reference](/minichain/appendix/instruction-set).
 
-For VM implementation details, see [Chapter 3, Section 3.3](/part3/chapter3-vm#33-opcode-definitions).
+For VM implementation details, see [Chapter 3, Section 3.3](/minichain/part3/chapter3-vm#33-opcode-definitions).
 </Aside>
 
 ### Instruction Categories
@@ -307,7 +307,7 @@ main:                ; Label definition
 ```
 
 <Aside type="tip">
-**For detailed instruction documentation** including all syntax variations, gas costs, usage examples, and gotchas, see [Appendix C: Complete Instruction Set Reference](/appendix/instruction-set).
+**For detailed instruction documentation** including all syntax variations, gas costs, usage examples, and gotchas, see [Appendix C: Complete Instruction Set Reference](/minichain/appendix/instruction-set).
 </Aside>
 
 ---
@@ -993,7 +993,7 @@ The final step is encoding AST instructions into the compact binary format our V
 
 ### Instruction Encoding Formats
 
-Recall from [Chapter 3](/part3/chapter3-vm#32-instruction-encoding), we have three main formats:
+Recall from [Chapter 3](/minichain/part3/chapter3-vm#32-instruction-encoding), we have three main formats:
 
 | Format | Bytes | Example | Encoding |
 |--------|-------|---------|----------|
@@ -1934,7 +1934,7 @@ Execution Result:
 
 ### Debugging Assembly with VM Tracer
 
-The VM tracer (from [Chapter 3](/part3/chapter3-vm#37-execution-tracing)) is invaluable for debugging:
+The VM tracer (from [Chapter 3](/minichain/part3/chapter3-vm#37-execution-tracing)) is invaluable for debugging:
 
 ```bash
 minichain-vm run contract.asm --trace --trace-storage

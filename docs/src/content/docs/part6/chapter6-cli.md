@@ -5,7 +5,7 @@ description: Building a full-featured CLI for minichain
 
 # Chapter 6: Command Line Interface
 
-In the previous chapters, we built all the core components of our blockchain: storage ([Chapter 2](/part2/chapter2-storage)), virtual machine ([Chapter 3](/part3/chapter3-vm)), assembler ([Chapter 4](/part4/chapter4-assembler)), and blockchain layer ([Chapter 5](/part5/chapter5-chain)). Now we need a way for users to interact with all this functionality.
+In the previous chapters, we built all the core components of our blockchain: storage ([Chapter 2](/minichain/part2/chapter2-storage)), virtual machine ([Chapter 3](/minichain/part3/chapter3-vm)), assembler ([Chapter 4](/minichain/part4/chapter4-assembler)), and blockchain layer ([Chapter 5](/minichain/part5/chapter5-chain)). Now we need a way for users to interact with all this functionality.
 
 This chapter builds a command-line interface (CLI) that ties everything together into a usable system. Think of the CLI as the "control panel" for your blockchain—a way to initialize chains, manage accounts, send transactions, deploy contracts, and produce blocks.
 
@@ -908,10 +908,10 @@ In this chapter, we built a comprehensive CLI that brings all previous component
 
 | Component | Integration |
 |-----------|-------------|
-| Storage ([Ch 2](/part2/chapter2-storage)) | Load/save accounts, blocks, transactions |
-| VM ([Ch 3](/part3/chapter3-vm)) | Execute contract code during block production |
-| Assembler ([Ch 4](/part4/chapter4-assembler)) | Compile `.asm` files in `deploy` command |
-| Blockchain ([Ch 5](/part5/chapter5-chain)) | Submit txs, produce blocks, validate |
+| Storage ([Ch 2](/minichain/part2/chapter2-storage)) | Load/save accounts, blocks, transactions |
+| VM ([Ch 3](/minichain/part3/chapter3-vm)) | Execute contract code during block production |
+| Assembler ([Ch 4](/minichain/part4/chapter4-assembler)) | Compile `.asm` files in `deploy` command |
+| Blockchain ([Ch 5](/minichain/part5/chapter5-chain)) | Submit txs, produce blocks, validate |
 
 The CLI provides:
 - **init**: Bootstrap new chains with genesis blocks
