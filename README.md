@@ -1,5 +1,12 @@
 # Minichain
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://jayendra-info.github.io/minichain/)
+[![GitHub stars](https://img.shields.io/github/stars/jayendra-info/minichain)](https://github.com/jayendra-info/minichain/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/jayendra-info/minichain)](https://github.com/jayendra-info/minichain/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+
 A minimal toy blockchain implementation in Rust — built for learning.
 
 ## What is this?
