@@ -35,7 +35,7 @@ export default defineConfig({
 				maxHeadingLevel: 3,
 			},
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/example/minichain' },
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/jayendra-info/minichain' },
 			],
 			head: [
 				{
