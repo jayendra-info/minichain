@@ -104,8 +104,8 @@ export default defineConfig({
 					label: 'Appendices',
 					items: [
 						{ label: 'A: Elliptic Curve Taxonomy', slug: 'appendix/elliptic-curves' },
-						{ label: 'B: Advanced Blockchain Concepts', slug: 'appendix/advanced-blockchain' },
-						{ label: 'C: Instruction Set Reference', slug: 'appendix/instruction-set' },
+						{ label: 'B: Instruction Set Reference', slug: 'appendix/instruction-set' },
+						{ label: 'C: Advanced Blockchain Concepts', slug: 'appendix/advanced-blockchain' },
 					],
 				},
 			],
