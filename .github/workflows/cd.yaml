@@ -3,6 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [master]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,14 +18,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout your repository using git
+      - name: Checkout
         uses: actions/checkout@v4
-      - name: Install, build, and upload your site output
+      
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+      
+      - name: Install, build, and upload
         uses: withastro/action@v3
         with:
           path: docs/
           package-manager: bun
-          build-cmd: bun run build
 
   deploy:
     needs: build
