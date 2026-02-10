@@ -8,7 +8,7 @@ import rehypeKatex from 'rehype-katex';
 export default defineConfig({
 	site: 'https://jayendra-info.github.io',
 	base: '/minichain',
-	trailingSlash: 'always',
+	trailingSlash: 'ignore',
 	markdown: {
 		remarkPlugins: [remarkMath],
 		rehypePlugins: [
