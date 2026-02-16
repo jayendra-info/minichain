@@ -1,12 +1,14 @@
 //! Account management command.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::Colorize;
+use minichain_chain::BlockchainConfig;
+use minichain_consensus::PoAConfig;
 use minichain_core::{Address, Keypair};
 use minichain_storage::{StateManager, Storage};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args)]
 pub struct AccountArgs {
@@ -50,6 +52,24 @@ enum AccountCommand {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
     },
+    /// Mint tokens (authority only)
+    Mint {
+        /// Directory to store blockchain data
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+
+        /// Authority keypair name (without .json extension)
+        #[arg(short, long)]
+        from: String,
+
+        /// Recipient address (hex format)
+        #[arg(short, long)]
+        to: String,
+
+        /// Amount to mint
+        #[arg(short, long)]
+        amount: u64,
+    },
 }
 
 pub fn run(args: AccountArgs) -> Result<()> {
@@ -58,6 +78,12 @@ pub fn run(args: AccountArgs) -> Result<()> {
         AccountCommand::Balance { data_dir, address } => check_balance(data_dir, address),
         AccountCommand::Info { data_dir, address } => show_info(data_dir, address),
         AccountCommand::List { data_dir } => list_keypairs(data_dir),
+        AccountCommand::Mint {
+            data_dir,
+            from,
+            to,
+            amount,
+        } => mint_tokens(data_dir, from, to, amount),
     }
 }
 
@@ -211,4 +237,135 @@ fn list_keypairs(data_dir: PathBuf) -> Result<()> {
 
     println!();
     Ok(())
+}
+
+fn mint_tokens(
+    data_dir: PathBuf,
+    from_name: String,
+    to_address_str: String,
+    amount: u64,
+) -> Result<()> {
+    println!("{}", "Minting tokens...".bold().cyan());
+    println!();
+
+    // Load authority keypair
+    let keys_dir = data_dir.join("keys");
+    let keypair = load_keypair(&keys_dir, &from_name)?;
+    let authority_addr = keypair.address();
+
+    println!("  Authority: {}", authority_addr.to_hex().bright_yellow());
+
+    // Load config and verify caller is an authority
+    let config = load_config(&data_dir)?;
+
+    if !config.consensus.authorities.contains(&authority_addr) {
+        bail!(
+            "Address {} is not an authority. Only authorities can mint tokens.\n\
+             Authorities: {}",
+            authority_addr.to_hex().bright_yellow(),
+            config
+                .consensus
+                .authorities
+                .iter()
+                .map(|a| a.to_hex()[..16].to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    // Parse recipient address
+    let to_address = Address::from_hex(&to_address_str)
+        .with_context(|| format!("Invalid address format: {}", to_address_str))?;
+
+    println!("  Recipient: {}", to_address.to_hex().bright_yellow());
+    println!("  Amount:    {}", amount.to_string().bright_cyan());
+
+    // Open storage and get state
+    let storage = Storage::open(&data_dir)
+        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+
+    let state = StateManager::new(&storage);
+
+    // Get current balance and add minted amount
+    let current_balance = state.get_balance(&to_address)?;
+    let new_balance = current_balance
+        .checked_add(amount)
+        .context("Overflow: balance too large")?;
+
+    state.set_balance(&to_address, new_balance)?;
+
+    println!();
+    println!(
+        "{}  Minted {} tokens",
+        "✓".green().bold(),
+        amount.to_string().bright_cyan()
+    );
+    println!("    New balance: {}", new_balance.to_string().bright_cyan());
+    println!();
+
+    Ok(())
+}
+
+fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
+    let key_file = keys_dir.join(format!("{}.json", name));
+    if !key_file.exists() {
+        bail!(
+            "Keypair file not found: {}. Use 'minichain account new' to create one.",
+            key_file.display()
+        );
+    }
+
+    let contents = fs::read_to_string(&key_file)?;
+    let json: serde_json::Value = serde_json::from_str(&contents)?;
+
+    let private_key_hex = json
+        .get("private_key")
+        .and_then(|v| v.as_str())
+        .context("Missing private_key in keypair file")?;
+
+    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
+
+    if private_key_bytes.len() != 32 {
+        bail!(
+            "Invalid private key length: expected 32 bytes, got {}",
+            private_key_bytes.len()
+        );
+    }
+
+    let mut private_key = [0u8; 32];
+    private_key.copy_from_slice(&private_key_bytes);
+
+    Keypair::from_private_key(&private_key).context("Failed to create keypair from private key")
+}
+
+fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
+    let config_file = data_dir.join("config.json");
+    let contents = fs::read_to_string(&config_file)
+        .context("Failed to read config.json. Did you run 'minichain init'?")?;
+
+    let json: serde_json::Value = serde_json::from_str(&contents)?;
+
+    let authorities: Vec<Address> = json
+        .get("authorities")
+        .and_then(|v| v.as_array())
+        .context("Missing authorities in config")?
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .and_then(|s| Address::from_hex(s).ok())
+                .context("Invalid authority address")
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let block_time = json.get("block_time").and_then(|v| v.as_u64()).unwrap_or(5);
+
+    let max_block_size = json
+        .get("max_block_size")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1000) as usize;
+
+    Ok(BlockchainConfig {
+        consensus: PoAConfig::new(authorities, block_time),
+        max_block_size,
+    })
 }
