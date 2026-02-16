@@ -6,7 +6,7 @@ use colored::Colorize;
 use minichain_chain::{Blockchain, BlockchainConfig};
 use minichain_consensus::PoAConfig;
 use minichain_core::{Block, Keypair};
-use minichain_storage::Storage;
+use minichain_storage::{ChainStore, Storage};
 use std::fs;
 use std::path::PathBuf;
 
@@ -23,6 +23,10 @@ pub struct InitArgs {
     /// Block time in seconds
     #[arg(short, long, default_value = "5")]
     block_time: u64,
+
+    /// Force reinitialization if already initialized
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    force: bool,
 }
 
 pub fn run(args: InitArgs) -> Result<()> {
@@ -34,7 +38,26 @@ pub fn run(args: InitArgs) -> Result<()> {
         .with_context(|| format!("Failed to create data directory: {:?}", args.data_dir))?;
 
     // Open storage
-    let storage = Storage::open(&args.data_dir).with_context(|| "Failed to open storage")?;
+    let mut storage = Storage::open(&args.data_dir).with_context(|| "Failed to open storage")?;
+
+    // Check if already initialized
+    let chain = ChainStore::new(&storage);
+    if chain.is_initialized()? {
+        if args.force {
+            // Remove existing data directory for reinitialization
+            fs::remove_dir_all(&args.data_dir)
+                .with_context(|| format!("Failed to remove data directory: {:?}", args.data_dir))?;
+            fs::create_dir_all(&args.data_dir)
+                .with_context(|| format!("Failed to create data directory: {:?}", args.data_dir))?;
+            storage = Storage::open(&args.data_dir).with_context(|| "Failed to open storage")?;
+            println!("{}  Removed existing data directory", "✓".green().bold());
+        } else {
+            anyhow::bail!(
+                "Chain already initialized. Use {} to reinitialize.",
+                "--force".bright_yellow()
+            );
+        }
+    }
 
     println!("{}  Created data directory", "✓".green().bold());
 
