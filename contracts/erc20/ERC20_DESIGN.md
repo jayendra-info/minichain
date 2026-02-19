@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a complete ERC20 token implementation for minichain written in assembly. It supports the full standard ERC20 interface plus mint/burn functionality.
+This is a complete ERC20 token implementation for minichain written in assembly. It supports the full standard ERC20 interface plus mint/burn functionality and metadata (name, symbol, decimals).
 
 ## Storage Architecture
 
@@ -14,6 +14,17 @@ Slot 0 (TOTAL_SUPPLY_SLOT):
 
 Slot 1 (OWNER_SLOT):
   64-bit address of the contract owner (can mint/burn)
+
+Slot 2 (NAME_SLOT):
+  64-bit value encoding token name (max 8 ASCII characters, little-endian)
+  Example: "MyToken\0" encoded as u64
+
+Slot 3 (SYMBOL_SLOT):
+  64-bit value encoding token symbol (max 8 ASCII characters, little-endian)
+  Example: "TKN\0\0\0\0\0" = 0x004E4B54 (little-endian)
+
+Slot 4 (DECIMALS_SLOT):
+  64-bit unsigned integer representing decimal places (e.g., 18 for Ethereum compatibility)
 
 Dynamic Slots (Balances):
   Key = hash(address XOR BALANCE_SLOT_ID)
@@ -133,6 +144,33 @@ This is a **simplified approach** for educational purposes. A real implementatio
 - Decrease total_supply
 - Return true
 
+### 9. name()
+**Function ID:** 0x08  
+**Arguments:** None  
+**Returns:** u64 (token name encoded as little-endian ASCII)  
+**Constraints:** None  
+**Logic:**
+- Load name from NAME_SLOT (slot 2)
+- Return to caller
+
+### 10. symbol()
+**Function ID:** 0x09  
+**Arguments:** None  
+**Returns:** u64 (token symbol encoded as little-endian ASCII)  
+**Constraints:** None  
+**Logic:**
+- Load symbol from SYMBOL_SLOT (slot 3)
+- Return to caller (max 8 ASCII characters)
+
+### 11. decimals()
+**Function ID:** 0x0A  
+**Arguments:** None  
+**Returns:** u64 (number of decimal places)  
+**Constraints:** None  
+**Logic:**
+- Load decimals from DECIMALS_SLOT (slot 4)
+- Return to caller (typically 18 for ERC20 compatibility)
+
 ## Calldata Format
 
 Functions accept calldata in the following format:
@@ -184,8 +222,9 @@ The contract uses memory for temporary storage:
 3. **No SafeERC20:** Implementation doesn't include return value checks
    - Minichain REVERT on errors is sufficient
 
-4. **No Decimals Metadata:** This implementation uses u64 integers directly
-   - Add metadata slots if needed for UI display
+4. **Fixed 64-bit Precision:** Uses u64 integers directly
+   - Decimals metadata defines UI representation (not actual precision)
+   - Practical limit: ~18 quintillion tokens max
 
 ### Security Patterns Applied
 
@@ -196,11 +235,13 @@ The contract uses memory for temporary storage:
 
 ## Implementation Statistics
 
-- **Total Lines:** ~180 assembly instructions
-- **Functions:** 8 core + dispatcher
-- **Storage Slots:** 2 fixed + N dynamic
+- **Total Lines:** ~417 assembly instructions
+- **Functions:** 11 core (6 standard ERC20 + 2 extended + 3 metadata) + dispatcher
+- **Storage Slots:** 5 fixed + N dynamic
+- **Bytecode Size:** ~897+ bytes (compiled)
 - **Time to Deploy:** <1 second
 - **Gas per Transfer:** ~5100 gas (estimate)
+- **Compiler:** minichain assembler (2-pass label resolution)
 
 ## Testing Strategy
 
@@ -242,7 +283,10 @@ The assembly code is organized into logical sections:
 ├── transferFrom() - Transfer with delegation
 ├── allowance() - Allowance lookup
 ├── mint() - Owner-only token creation
-└── burn() - Owner-only token destruction
+├── burn() - Owner-only token destruction
+├── name() - Return token name metadata
+├── symbol() - Return token symbol metadata
+└── decimals() - Return decimal places metadata
 ```
 
 Each function includes:
@@ -263,13 +307,13 @@ This minimizes register pressure and keeps the code readable.
 
 ## Future Enhancements
 
-1. **Metadata Functions** - Add name(), symbol(), decimals()
-2. **Event Simulation** - Store transfer logs in special storage slots
-3. **SafeERC20** - Add return value validation
-4. **Pause Mechanism** - Owner-controlled pause/unpause
-5. **Blacklist** - Owner-controlled address blocking
-6. **Rebase/Deflation** - Fee-on-transfer mechanism
-7. **Snapshot** - Historical balance tracking
+1. **Event Simulation** - Store transfer logs in special storage slots
+2. **SafeERC20** - Add return value validation
+3. **Pause Mechanism** - Owner-controlled pause/unpause
+4. **Blacklist** - Owner-controlled address blocking
+5. **Rebase/Deflation** - Fee-on-transfer mechanism
+6. **Snapshot** - Historical balance tracking
+7. **Delegate/Voting** - Token holder voting power delegation
 
 ## Reference Implementation
 
