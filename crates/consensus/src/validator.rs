@@ -64,7 +64,7 @@ impl TransactionValidator {
 
         // Check gas limit minimums
         let min_gas = if tx.is_deploy() {
-            53_000 // Minimum gas for contract deployment
+            21_000 // Minimum gas for contract deployment
         } else if tx.is_call() {
             21_000 + tx.data.len() as u64 * 68 // Base + calldata cost
         } else {

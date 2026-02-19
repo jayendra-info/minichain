@@ -147,9 +147,11 @@ fn send_transfer(
     register_authorities(&mut blockchain, &data_dir)?;
 
     // Submit transaction
-    blockchain
-        .submit_transaction(tx)
-        .context("Failed to submit transaction")?;
+    if let Err(err) = blockchain.submit_transaction(tx) {
+        eprintln!("{}  Transaction failed", "✗".red().bold());
+        eprintln!("Error: {:#}", err);
+        anyhow::bail!("Failed to submit transaction");
+    }
 
     println!("{}  Transaction submitted to mempool", "✓".green().bold());
     println!();
