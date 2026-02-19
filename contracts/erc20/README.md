@@ -134,6 +134,36 @@ cargo run --release -- call --from alice --to 0x... --data "07:00000000000000064
 cargo run --release -- block produce --authority authority_0
 ```
 
+### name()
+
+Get the token name (returns name encoded as u64, limited to 8 chars):
+
+```bash
+cargo run --release -- call --from alice --to 0x... --data "08"
+```
+
+Returns: Token name in memory[0] (encoded as little-endian u64)
+
+### symbol()
+
+Get the token symbol (returns symbol encoded as u64, limited to 8 chars):
+
+```bash
+cargo run --release -- call --from alice --to 0x... --data "09"
+```
+
+Returns: Token symbol in memory[0] (encoded as little-endian u64)
+
+### decimals()
+
+Get the number of decimal places:
+
+```bash
+cargo run --release -- call --from alice --to 0x... --data "0a"
+```
+
+Returns: Decimals value in memory[0] (typically 18)
+
 ## Calldata Format
 
 Each function call requires calldata in hex format. The format is:
@@ -154,6 +184,9 @@ Each function call requires calldata in hex format. The format is:
 | allowance | 05 | owner, spender |
 | mint | 06 | to, amount |
 | burn | 07 | amount |
+| name | 08 | - |
+| symbol | 09 | - |
+| decimals | 0A | - |
 
 ### Address Format
 
@@ -244,8 +277,10 @@ See [ERC20_DESIGN.md](./ERC20_DESIGN.md) for:
 
 1. **XOR Hashing**: Uses simplified XOR instead of Blake3 for storage keys
 2. **No Events**: Minichain doesn't support events; rely on transaction history
-3. **Fixed Precision**: 64-bit unsigned integers (no decimals configuration)
-4. **Single Owner**: Mint/burn restricted to contract owner
+3. **Limited Metadata**: Name and symbol limited to 8 ASCII characters (encoded as u64)
+4. **Fixed Precision**: 64-bit unsigned integers (no flexible decimals configuration)
+5. **Single Owner**: Mint/burn restricted to contract owner
+6. **Little Endian**: All numbers are stored in little-endian format
 
 ## Comparison to Standard ERC20
 
@@ -257,9 +292,9 @@ See [ERC20_DESIGN.md](./ERC20_DESIGN.md) for:
 | allowance | ✓ | ✓ |
 | balanceOf | ✓ | ✓ |
 | totalSupply | ✓ | ✓ |
-| name() | - | ✓ |
-| symbol() | - | ✓ |
-| decimals() | - | ✓ |
+| name() | ✓ | ✓ |
+| symbol() | ✓ | ✓ |
+| decimals() | ✓ | ✓ |
 | mint | ✓ | ✗ (often added) |
 | burn | ✓ | ✗ (often added) |
 | Events | - | ✓ |
@@ -280,12 +315,14 @@ See [ERC20_DESIGN.md](./ERC20_DESIGN.md) for:
 
 ## Future Enhancements
 
-1. Add metadata functions (name, symbol, decimals)
+1. ✓ Implement metadata functions (name, symbol, decimals)
 2. Implement event simulation via special storage slots
 3. Add pause/unpause mechanism
 4. Implement address blacklist
 5. Add snapshot functionality for historical balances
 6. Implement rebase/fee mechanisms
+7. Add minter/burner role management
+8. Implement permit() for gasless approvals
 
 ## Contributing
 

@@ -2,11 +2,14 @@
 ; ERC20 Token Contract for Minichain
 ;=============================================================================
 ;
-; Standard ERC20 implementation with mint and burn functionality.
+; Standard ERC20 implementation with mint, burn, and metadata functions.
 ;
 ; Storage Layout:
 ;   Slot 0: total_supply (u64)
 ;   Slot 1: owner_address (u64)
+;   Slot 2: name (encoded as u64, first 8 chars)
+;   Slot 3: symbol (encoded as u64, first 8 chars)
+;   Slot 4: decimals (u64)
 ;   Slot hash(address || 0): balances[address]
 ;   Slot hash(address || hash(spender || 1)): allowances[owner][spender]
 ;
@@ -19,6 +22,9 @@
 ;   0x05: allowance(owner, spender)
 ;   0x06: mint(to, amount)
 ;   0x07: burn(amount)
+;   0x08: name()
+;   0x09: symbol()
+;   0x0A: decimals()
 ;
 ;=============================================================================
 
@@ -80,6 +86,24 @@ main:
     LOADI R1, 7
     EQ R2, R0, R1
     LOADI R3, func_burn
+    JUMPI R2, R3
+
+    ; name
+    LOADI R1, 8
+    EQ R2, R0, R1
+    LOADI R3, func_name
+    JUMPI R2, R3
+
+    ; symbol
+    LOADI R1, 9
+    EQ R2, R0, R1
+    LOADI R3, func_symbol
+    JUMPI R2, R3
+
+    ; decimals
+    LOADI R1, 10
+    EQ R2, R0, R1
+    LOADI R3, func_decimals
     JUMPI R2, R3
 
     ; Unknown function - revert
@@ -345,6 +369,47 @@ func_burn:
 
 burn_revert:
     REVERT
+
+;=============================================================================
+; FUNCTION: name()
+; Function ID: 0x08
+; Returns: token name (stored in slot 2, encoded as u64)
+; Note: Name is limited to 8 ASCII characters encoded as little-endian u64
+;       Example: "MyToken\0" = 0x007F6B6F54794D (little endian)
+;=============================================================================
+func_name:
+    LOADI R0, 2                  ; Storage slot 2 = name
+    SLOAD R1, R0                 ; Load name
+    LOADI R2, 0
+    STORE64 R2, R1               ; Store return value in memory[0]
+    HALT
+
+;=============================================================================
+; FUNCTION: symbol()
+; Function ID: 0x09
+; Returns: token symbol (stored in slot 3, encoded as u64)
+; Note: Symbol is limited to 8 ASCII characters encoded as little-endian u64
+;       Example: "TKN\0\0\0\0\0" = 0x004E4B54 (little endian)
+;=============================================================================
+func_symbol:
+    LOADI R0, 3                  ; Storage slot 3 = symbol
+    SLOAD R1, R0                 ; Load symbol
+    LOADI R2, 0
+    STORE64 R2, R1               ; Store return value in memory[0]
+    HALT
+
+;=============================================================================
+; FUNCTION: decimals()
+; Function ID: 0x0A
+; Returns: number of decimal places (stored in slot 4)
+; Standard value is 18 (matches Ethereum), but can be set to other values
+;=============================================================================
+func_decimals:
+    LOADI R0, 4                  ; Storage slot 4 = decimals
+    SLOAD R1, R0                 ; Load decimals
+    LOADI R2, 0
+    STORE64 R2, R1               ; Store return value in memory[0]
+    HALT
 
 ;=============================================================================
 ; END OF ERC20 CONTRACT
