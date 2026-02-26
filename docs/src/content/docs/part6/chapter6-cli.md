@@ -81,13 +81,20 @@ minichain init [OPTIONS]
 - `-d, --data-dir <PATH>`: Directory to store blockchain data (default: `./data`)
 - `-a, --authorities <N>`: Number of authorities to generate (default: `1`)
 - `-b, --block-time <SECONDS>`: Target block time (default: `5`)
+- `-f, --force`: Reinitialize if the chain is already initialized
 
 **What it does:**
 1. Creates the data directory structure
-2. Generates Ed25519 keypairs for authorities
-3. Creates and signs the genesis block
-4. Saves authority keypairs to `data/keys/authority_*.json`
-5. Saves blockchain config to `data/config.json`
+2. Fails if the chain is already initialized (unless `--force` is provided)
+3. With `--force`, removes existing chain data and reinitializes from scratch
+4. Generates Ed25519 keypairs for authorities
+5. Creates and signs the genesis block
+6. Saves authority keypairs to `data/keys/authority_*.json`
+7. Saves blockchain config to `data/config.json`
+
+If `init` is run against an already initialized chain without `--force`, it exits with an error.
+
+Use `--force` only when you intentionally want to reset chain state in that data directory.
 
 **Example:**
 ```bash
@@ -112,6 +119,16 @@ Next steps:
   • Use minichain account new to create accounts
   • Use minichain tx send to send transactions
   • Use minichain block list to explore blocks
+```
+
+**Reinitialize an existing chain:**
+```bash
+$ minichain init --data-dir ./data --force
+
+Initializing minichain...
+✓  Removed existing data directory
+...
+Chain initialized successfully!
 ```
 
 **Files created:**

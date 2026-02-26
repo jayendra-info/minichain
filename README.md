@@ -106,6 +106,12 @@ cargo run --release -- init --authorities 1
 # ✓  Saved config to: data/config.json
 ```
 
+If the chain is already initialized in the same data directory, rerun with `--force` to reset:
+
+```bash
+cargo run --release -- init --force
+```
+
 ### 2. Create Accounts
 
 ```bash
