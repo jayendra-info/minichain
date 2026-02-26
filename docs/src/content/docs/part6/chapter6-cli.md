@@ -17,7 +17,7 @@ This chapter builds a command-line interface (CLI) that ties everything together
 | `account` | Manage keypairs and query balances | `minichain account new --name alice` |
 | `tx send` | Send value transfer transactions | `minichain tx send --from alice --to bob --amount 100` |
 | `block` | Query and produce blocks | `minichain block produce --authority authority_0` |
-| `deploy` | Compile and deploy contracts | `minichain deploy --from alice --source counter.asm` |
+| `deploy` | Compile and deploy contracts | `minichain deploy --from alice --source counter.asm --gas-limit 50000` |
 | `call` | Invoke deployed contracts | `minichain call --from alice --to 0xABC... --data 00` |
 
 ## Why a CLI?
@@ -81,13 +81,20 @@ minichain init [OPTIONS]
 - `-d, --data-dir <PATH>`: Directory to store blockchain data (default: `./data`)
 - `-a, --authorities <N>`: Number of authorities to generate (default: `1`)
 - `-b, --block-time <SECONDS>`: Target block time (default: `5`)
+- `-f, --force`: Reinitialize if the chain is already initialized
 
 **What it does:**
 1. Creates the data directory structure
-2. Generates Ed25519 keypairs for authorities
-3. Creates and signs the genesis block
-4. Saves authority keypairs to `data/keys/authority_*.json`
-5. Saves blockchain config to `data/config.json`
+2. Fails if the chain is already initialized (unless `--force` is provided)
+3. With `--force`, removes existing chain data and reinitializes from scratch
+4. Generates Ed25519 keypairs for authorities
+5. Creates and signs the genesis block
+6. Saves authority keypairs to `data/keys/authority_*.json`
+7. Saves blockchain config to `data/config.json`
+
+If `init` is run against an already initialized chain without `--force`, it exits with an error.
+
+Use `--force` only when you intentionally want to reset chain state in that data directory.
 
 **Example:**
 ```bash
@@ -112,6 +119,16 @@ Next steps:
   • Use minichain account new to create accounts
   • Use minichain tx send to send transactions
   • Use minichain block list to explore blocks
+```
+
+**Reinitialize an existing chain:**
+```bash
+$ minichain init --data-dir ./data --force
+
+Initializing minichain...
+✓  Removed existing data directory
+...
+Chain initialized successfully!
 ```
 
 **Files created:**
@@ -235,6 +252,42 @@ Saved Keypairs:
   bob.json: 0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e
   authority_0.json: 0xf4a5e8c2b9d7f3a1e6c4b8d2f5a9e7c3b6d4f8a2
   authority_1.json: 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
+```
+
+#### `minichain account mint`
+
+Mint tokens to an address (authority keypair required).
+
+**Usage:**
+```bash
+minichain account mint [OPTIONS]
+```
+
+**Options:**
+- `-d, --data-dir <PATH>`: Blockchain data directory (default: `./data`)
+- `-f, --from <NAME>`: Authority keypair name (without `.json`)
+- `-t, --to <ADDRESS>`: Recipient address (hex format)
+- `-a, --amount <AMOUNT>`: Amount to mint
+
+**What it does:**
+1. Loads the keypair from `data/keys/{from}.json`
+2. Verifies the keypair address is configured as a chain authority
+3. Adds `amount` directly to recipient balance in state
+
+If `--from` is not an authority keypair, the command fails.
+
+**Example:**
+```bash
+$ minichain account mint --from authority_0 --to 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a --amount 50000
+
+Minting tokens...
+
+  Authority: 0xf4a5e8c2b9d7f3a1e6c4b8d2f5a9e7c3b6d4f8a2
+  Recipient: 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
+  Amount:    50000
+
+✓  Minted 50000 tokens
+    New balance: 50000
 ```
 
 ### `minichain tx send`
@@ -409,14 +462,17 @@ minichain deploy [OPTIONS]
 - `-f, --from <NAME>`: Deployer keypair name (without `.json`)
 - `-s, --source <PATH>`: Path to assembly source file
 - `--gas-price <PRICE>`: Gas price (default: `1`)
+- `--gas-limit <LIMIT>`: Maximum gas to spend (required safety cap)
 
 **What it does:**
 1. Reads and compiles the assembly source file
 2. Loads the deployer's keypair
-3. Checks balance against deployment cost
-4. Creates and signs a deploy transaction
-5. Submits it to the mempool
-6. Calculates the contract address (deterministic from sender + nonce)
+3. Calculates required deployment gas (`21,000 + bytecode_len * 200`)
+4. Verifies required gas does not exceed `--gas-limit`
+5. Checks balance against `gas_limit * gas_price`
+6. Creates and signs a deploy transaction (using required gas)
+7. Submits it to the mempool
+8. Calculates the contract address (deterministic from sender + nonce)
 
 **Example:**
 Create a simple counter contract (`counter.asm`):
@@ -434,7 +490,7 @@ main:
 
 Deploy it:
 ```bash
-$ minichain deploy --from alice --source counter.asm
+$ minichain deploy --from alice --source counter.asm --gas-limit 50000
 
 Deploying contract...
 
@@ -456,10 +512,12 @@ Transaction will be included in the next block.
 Use minichain block produce to produce a block.
 ```
 
-**Gas estimation:**
+**Gas estimation and limits:**
 - Base: 21,000 gas
 - Per byte of bytecode: 200 gas
-- Example: 28-byte contract costs ~26,600 gas
+- Example: 28-byte contract requires 26,600 gas
+
+The command fails if `--gas-limit` is lower than required gas.
 
 **Contract address calculation:**
 ```
@@ -630,7 +688,7 @@ main:
 
 Deploy:
 ```bash
-$ minichain deploy --from alice --source storage_test.asm
+$ minichain deploy --from alice --source storage_test.asm --gas-limit 80000
 
 Deploying contract...
   Compiling: storage_test.asm
@@ -722,7 +780,7 @@ Always estimate gas costs before submitting transactions:
 | Deploy (per byte) | 200 |
 | Call (per byte calldata) | 68 |
 | SLOAD | 100 |
-| SSTORE | 5,000 |
+| SSTORE | 5,000-20,000 |
 
 **Example:** Deploying a 100-byte contract with gas price 2:
 ```
@@ -755,10 +813,12 @@ Common errors and solutions:
 | Error | Solution |
 |-------|----------|
 | "Insufficient balance" | Check balance with `account balance`, ensure enough for amount + gas |
+| "Gas limit too low" | Increase `deploy --gas-limit` to at least `21,000 + (bytecode_len * 200)` |
 | "Keypair file not found" | Verify the keypair name (without `.json`) and data directory |
 | "Address is not an authority" | Use correct authority keypair for `block produce` |
 | "Invalid nonce" | Another transaction is pending; wait for block production |
 | "Address is not a contract" | Double-check the contract address; may not be deployed yet |
+| "Failed to submit transaction" | Read the printed error details and fix validation failures (balance/nonce/target) |
 
 ### Scripting Workflows
 
@@ -775,7 +835,7 @@ minichain init --authorities 1
 minichain account new --name deployer
 
 # Deploy contract
-minichain deploy --from deployer --source contract.asm
+minichain deploy --from deployer --source contract.asm --gas-limit 80000
 
 # Produce block
 minichain block produce --authority authority_0

@@ -39,10 +39,10 @@ Built as an educational project to understand blockchain internals from scratch.
 ### Virtual Machine
 
 - 16 general-purpose registers (R0-R15)
-- 60+ opcodes covering arithmetic, logic, memory, storage, and control flow
+- 40+ opcodes covering arithmetic, logic, memory, storage, and control flow
 - Separate memory (RAM) and storage (disk) operations
 - Gas metering on every operation
-- Stack-based function calls with CALL/RET
+- CALL/RET control-flow opcodes
 
 ### Assembly Language
 
@@ -106,6 +106,12 @@ cargo run --release -- init --authorities 1
 # ✓  Saved config to: data/config.json
 ```
 
+If the chain is already initialized in the same data directory, rerun with `--force` to reset:
+
+```bash
+cargo run --release -- init --force
+```
+
 ### 2. Create Accounts
 
 ```bash
@@ -117,7 +123,17 @@ cargo run --release -- account new --name bob
 cargo run --release -- account list
 ```
 
-### 3. Deploy a Contract
+### 3. Fund Accounts (Authority Only)
+
+```bash
+# Mint tokens so Alice can pay deployment and call gas
+cargo run --release -- account mint --from authority_0 --to <ALICE_ADDRESS> --amount 50000
+
+# Optional: fund Bob if Bob will send transactions/calls
+cargo run --release -- account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
+```
+
+### 4. Deploy a Contract
 
 Create a simple counter contract (`counter.asm`):
 
@@ -136,7 +152,7 @@ main:
 Deploy it:
 
 ```bash
-cargo run --release -- deploy --from alice --source counter.asm
+cargo run --release -- deploy --from alice --source counter.asm --gas-limit 80000
 
 # Output:
 # Deploying contract...
@@ -146,7 +162,7 @@ cargo run --release -- deploy --from alice --source counter.asm
 #   Contract Address: 0xa7b3c9e5d1f4a8c2...
 ```
 
-### 4. Produce a Block
+### 5. Produce a Block
 
 ```bash
 cargo run --release -- block produce --authority authority_0
@@ -160,7 +176,7 @@ cargo run --release -- block produce --authority authority_0
 #     Txs:    1
 ```
 
-### 5. Call the Contract
+### 6. Call the Contract
 
 ```bash
 cargo run --release -- call --from alice --to 0xa7b3c9e5d1f4a8c2...
@@ -169,7 +185,7 @@ cargo run --release -- call --from alice --to 0xa7b3c9e5d1f4a8c2...
 cargo run --release -- block produce --authority authority_0
 ```
 
-### 6. Explore the Chain
+### 7. Explore the Chain
 
 ```bash
 # List recent blocks
@@ -188,6 +204,7 @@ cargo run --release -- account balance 0x3f8c2a6e9b5d1f4a...
 |---------|-------------|---------|
 | `init` | Initialize new blockchain | `minichain init --authorities 2` |
 | `account new` | Generate keypair | `minichain account new --name alice` |
+| `account mint` | Mint tokens (authority only) | `minichain account mint --from authority_0 --to 0xABC... --amount 50000` |
 | `account balance` | Query balance | `minichain account balance 0xABC...` |
 | `account info` | Show account details | `minichain account info 0xABC...` |
 | `account list` | List all keypairs | `minichain account list` |
@@ -195,7 +212,7 @@ cargo run --release -- account balance 0x3f8c2a6e9b5d1f4a...
 | `block list` | List recent blocks | `minichain block list --count 10` |
 | `block info` | Show block details | `minichain block info 5` |
 | `block produce` | Produce new block | `minichain block produce --authority authority_0` |
-| `deploy` | Deploy contract | `minichain deploy --from alice --source contract.asm` |
+| `deploy` | Deploy contract | `minichain deploy --from alice --source contract.asm --gas-limit 80000` |
 | `call` | Call contract | `minichain call --from alice --to 0xABC... --data 00` |
 
 Run `minichain --help` or `minichain <command> --help` for detailed usage.
@@ -281,7 +298,11 @@ minichain init --authorities 1
 minichain account new --name alice
 minichain account new --name bob
 
-# 3. Create a storage test contract (storage_test.asm)
+# 3. Fund Alice and Bob with authority key
+minichain account mint --from authority_0 --to <ALICE_ADDRESS> --amount 50000
+minichain account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
+
+# 4. Create a storage test contract (storage_test.asm)
 # .entry main
 # main:
 #     LOADI R0, 0
@@ -291,20 +312,20 @@ minichain account new --name bob
 #     SSTORE R0, R1
 #     HALT
 
-# 4. Deploy contract
-minichain deploy --from alice --source storage_test.asm
+# 5. Deploy contract
+minichain deploy --from alice --source storage_test.asm --gas-limit 80000
 
-# 5. Produce block to include deployment
+# 6. Produce block to include deployment
 minichain block produce --authority authority_0
 
-# 6. Call contract twice
+# 7. Call contract twice
 minichain call --from alice --to 0xa7b3c9e5d1f4a8c2...
 minichain block produce --authority authority_0
 
 minichain call --from bob --to 0xa7b3c9e5d1f4a8c2...
 minichain block produce --authority authority_0
 
-# 7. View blockchain state
+# 8. View blockchain state
 minichain block list
 minichain block info 3
 minichain account info 0xa7b3c9e5d1f4a8c2...
@@ -342,7 +363,7 @@ User → CLI → Blockchain → Mempool → Block Production → Executor → VM
 |-----------|----------|-------|
 | Transfer | 21,000 | Base transaction cost |
 | SLOAD | 100 | Storage read |
-| SSTORE | 5,000 | Storage write |
+| SSTORE | 5,000-20,000 | Storage write (reset vs set) |
 | LOAD64 | 3 | Memory read |
 | STORE64 | 3 | Memory write |
 | ADD/SUB/MUL | 2 | Arithmetic operations |

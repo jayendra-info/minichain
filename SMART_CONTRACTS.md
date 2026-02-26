@@ -54,7 +54,7 @@ slot hash(address, hash(spender, 1)): allowances[owner][spender]
 
 ```bash
 # Deploy token contract
-minichain deploy --from alice --source erc20.asm
+minichain deploy --from alice --source erc20.asm --gas-limit 120000
 
 # Transfer 100 tokens from Alice to Bob
 minichain call --from alice --to TOKEN_ADDR --data <transfer_calldata>
@@ -128,7 +128,7 @@ slot hash(proposal_id, hash(signer, 7)): has_signed
 
 ```bash
 # Deploy 2-of-3 multisig (Alice, Bob, Charlie)
-minichain deploy --from alice --source multisig.asm
+minichain deploy --from alice --source multisig.asm --gas-limit 150000
 
 # Alice submits proposal to send 100 tokens
 minichain call --from alice --to MULTISIG --data <submit_proposal>
@@ -222,7 +222,7 @@ Refunded (3) → Buyer withdraws
 ```bash
 # 1. Deploy escrow (buyer=alice, seller=bob, arbiter=charlie)
 # Deadline: 7 days from now
-minichain deploy --from alice --source escrow.asm
+minichain deploy --from alice --source escrow.asm --gas-limit 120000
 
 # 2. Alice deposits 1000 tokens
 minichain call --from alice --to ESCROW --amount 1000
@@ -332,7 +332,7 @@ Finalized (funds withdrawn)
 
 ```bash
 # Alice auctions an NFT (conceptual), 1 hour duration
-minichain deploy --from alice --source auction.asm
+minichain deploy --from alice --source auction.asm --gas-limit 150000
 
 # Bob bids 100
 minichain call --from bob --to AUCTION --amount 100
@@ -442,7 +442,7 @@ Executed (if passed)
 
 ```bash
 # Deploy DAO with 50% quorum
-minichain deploy --from alice --source dao.asm
+minichain deploy --from alice --source dao.asm --gas-limit 180000
 
 # Proposal 1: "Increase block time to 10 seconds"
 minichain call --from alice --to DAO --data <create_proposal>

@@ -13,8 +13,8 @@ By the end of this chapter, you'll have implemented:
 
 | Module | Purpose |
 |--------|---------|
-| `opcodes.rs` | Instruction set definition (60+ opcodes) |
-| `memory.rs` | Registers, stack, and linear memory |
+| `opcodes.rs` | Instruction set definition (43 opcodes) |
+| `memory.rs` | Registers and linear memory |
 | `gas.rs` | Gas metering and cost tables |
 | `executor.rs` | The fetch-decode-execute loop |
 | `tracer.rs` | Execution tracing for debugging |
@@ -205,15 +205,15 @@ x86-64 has 16 general-purpose registers. We match that convention.
 
 ## 3.1 Architecture Overview
 
-Our VM has three main components:
+Our VM has three main state components:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         VM State                             │
 ├─────────────────┬──────────────────┬────────────────────────┤
-│   Registers     │     Stack        │      Memory            │
-│   R0-R15        │   (call frames)  │   (linear buffer)      │
-│   64-bit each   │                  │                        │
+│   Registers     │  Execution Ctx   │      Memory            │
+│   R0-R15        │  caller/address  │   (linear buffer)      │
+│   64-bit each   │  value/block/ts  │                        │
 ├─────────────────┴──────────────────┴────────────────────────┤
 │                     Program Counter (PC)                     │
 │                     Gas Remaining                            │
@@ -259,11 +259,7 @@ impl Registers {
 <Aside type="tip" title="Why 16 Registers?">
 16 registers can be addressed with 4 bits. This keeps instruction encoding compact while providing enough registers for most computations without spilling to memory.
 
-- R0-R11: General purpose
-- R12: Often used as frame pointer
-- R13: Often used as stack pointer
-- R14: Link register (return address)
-- R15: Program counter (read-only via instructions)
+All registers are general-purpose in the current VM implementation.
 </Aside>
 
 ### Memory
@@ -362,16 +358,15 @@ We organize opcodes into categories:
 | 0x30-0x3F | Comparison | EQ, NE, LT, GT, LE, GE |
 | 0x40-0x4F | Memory | LOAD8, LOAD64, STORE8, STORE64 |
 | 0x50-0x5F | Storage | SLOAD, SSTORE |
-| 0x60-0x6F | Stack | PUSH, POP |
-| 0x70-0x7F | Immediate | LOADI, ADDI |
+| 0x70-0x7F | Immediate | LOADI, MOV |
 | 0x80-0x8F | Context | CALLER, CALLVALUE, ADDRESS |
-| 0xF0-0xFF | Debug | LOG, TRACE |
+| 0xF0-0xFF | Debug | LOG |
 
 ---
 
 ## 3.3 Opcode Definitions
 
-Our VM uses a **50-instruction** set organized into 9 categories: control flow, arithmetic, bitwise, comparison, memory, storage, immediate, context, and debug operations.
+Our VM uses a **43-instruction** set organized into 9 categories: control flow, arithmetic, bitwise, comparison, memory, storage, immediate, context, and debug operations.
 
 <Aside type="note" title="Complete Instruction Set Reference">
 For the full instruction set with syntax, gas costs, and examples, see [Appendix B: Complete Instruction Set Reference](/minichain/appendix/instruction-set).
@@ -1150,7 +1145,7 @@ We've built a register-based virtual machine:
 |-----------|--------------|
 | `Registers` | 16 × 64-bit general-purpose registers |
 | `Memory` | Growable linear memory buffer |
-| `Opcode` | 60+ instructions (arithmetic, logic, memory, storage) |
+| `Opcode` | 43 instructions (arithmetic, logic, memory, storage) |
 | `GasMeter` | Tracks and limits computation |
 | `Vm` | The fetch-decode-execute loop |
 | `Tracer` | Records execution for debugging |
