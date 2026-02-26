@@ -28,6 +28,10 @@ pub struct DeployArgs {
     /// Gas price
     #[arg(long, default_value = "1")]
     gas_price: u64,
+
+    /// Maximum gas to spend (safety cap)
+    #[arg(long)]
+    gas_limit: u64,
 }
 
 pub fn run(args: DeployArgs) -> Result<()> {
@@ -69,9 +73,20 @@ pub fn run(args: DeployArgs) -> Result<()> {
     println!("  Balance:   {}", balance.to_string().bright_black());
     println!();
 
-    // Check balance (approximate gas needed)
-    let gas_limit = 21_000 + (bytecode.len() as u64 * 200);
-    let total_cost = gas_limit * args.gas_price;
+    // Calculate gas needed for deployment
+    let gas_required = 21_000 + (bytecode.len() as u64 * 200);
+
+    // Check gas limit is sufficient
+    if gas_required > args.gas_limit {
+        anyhow::bail!(
+            "Gas limit too low: required {}, got {}",
+            gas_required,
+            args.gas_limit
+        );
+    }
+
+    // Check balance (max cost based on user's gas limit)
+    let total_cost = args.gas_limit * args.gas_price;
 
     if balance < total_cost {
         anyhow::bail!(
@@ -81,8 +96,8 @@ pub fn run(args: DeployArgs) -> Result<()> {
         );
     }
 
-    // Create and sign deploy transaction
-    let tx = Transaction::deploy(from, bytecode.clone(), nonce, gas_limit, args.gas_price)
+    // Create and sign deploy transaction (uses calculated gas, not limit)
+    let tx = Transaction::deploy(from, bytecode.clone(), nonce, gas_required, args.gas_price)
         .signed(&keypair);
     let tx_hash = tx.hash();
 
@@ -103,9 +118,11 @@ pub fn run(args: DeployArgs) -> Result<()> {
     register_authorities(&mut blockchain, &args.data_dir)?;
 
     // Submit transaction
-    blockchain
-        .submit_transaction(tx)
-        .context("Failed to submit transaction")?;
+    if let Err(err) = blockchain.submit_transaction(tx) {
+        eprintln!("{}  Transaction failed", "✗".red().bold());
+        eprintln!("Error: {:#}", err);
+        anyhow::bail!("Failed to submit transaction");
+    }
 
     println!("{}  Contract deployment submitted", "✓".green().bold());
     println!();
