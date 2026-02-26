@@ -152,7 +152,7 @@ main:
 Deploy it:
 
 ```bash
-cargo run --release -- deploy --from alice --source counter.asm
+cargo run --release -- deploy --from alice --source counter.asm --gas-limit 80000
 
 # Output:
 # Deploying contract...
@@ -212,7 +212,7 @@ cargo run --release -- account balance 0x3f8c2a6e9b5d1f4a...
 | `block list` | List recent blocks | `minichain block list --count 10` |
 | `block info` | Show block details | `minichain block info 5` |
 | `block produce` | Produce new block | `minichain block produce --authority authority_0` |
-| `deploy` | Deploy contract | `minichain deploy --from alice --source contract.asm` |
+| `deploy` | Deploy contract | `minichain deploy --from alice --source contract.asm --gas-limit 80000` |
 | `call` | Call contract | `minichain call --from alice --to 0xABC... --data 00` |
 
 Run `minichain --help` or `minichain <command> --help` for detailed usage.
@@ -313,7 +313,7 @@ minichain account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
 #     HALT
 
 # 5. Deploy contract
-minichain deploy --from alice --source storage_test.asm
+minichain deploy --from alice --source storage_test.asm --gas-limit 80000
 
 # 6. Produce block to include deployment
 minichain block produce --authority authority_0

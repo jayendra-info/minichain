@@ -17,7 +17,7 @@ This chapter builds a command-line interface (CLI) that ties everything together
 | `account` | Manage keypairs and query balances | `minichain account new --name alice` |
 | `tx send` | Send value transfer transactions | `minichain tx send --from alice --to bob --amount 100` |
 | `block` | Query and produce blocks | `minichain block produce --authority authority_0` |
-| `deploy` | Compile and deploy contracts | `minichain deploy --from alice --source counter.asm` |
+| `deploy` | Compile and deploy contracts | `minichain deploy --from alice --source counter.asm --gas-limit 50000` |
 | `call` | Invoke deployed contracts | `minichain call --from alice --to 0xABC... --data 00` |
 
 ## Why a CLI?
@@ -462,14 +462,17 @@ minichain deploy [OPTIONS]
 - `-f, --from <NAME>`: Deployer keypair name (without `.json`)
 - `-s, --source <PATH>`: Path to assembly source file
 - `--gas-price <PRICE>`: Gas price (default: `1`)
+- `--gas-limit <LIMIT>`: Maximum gas to spend (required safety cap)
 
 **What it does:**
 1. Reads and compiles the assembly source file
 2. Loads the deployer's keypair
-3. Checks balance against deployment cost
-4. Creates and signs a deploy transaction
-5. Submits it to the mempool
-6. Calculates the contract address (deterministic from sender + nonce)
+3. Calculates required deployment gas (`21,000 + bytecode_len * 200`)
+4. Verifies required gas does not exceed `--gas-limit`
+5. Checks balance against `gas_limit * gas_price`
+6. Creates and signs a deploy transaction (using required gas)
+7. Submits it to the mempool
+8. Calculates the contract address (deterministic from sender + nonce)
 
 **Example:**
 Create a simple counter contract (`counter.asm`):
@@ -487,7 +490,7 @@ main:
 
 Deploy it:
 ```bash
-$ minichain deploy --from alice --source counter.asm
+$ minichain deploy --from alice --source counter.asm --gas-limit 50000
 
 Deploying contract...
 
@@ -509,10 +512,12 @@ Transaction will be included in the next block.
 Use minichain block produce to produce a block.
 ```
 
-**Gas estimation:**
+**Gas estimation and limits:**
 - Base: 21,000 gas
 - Per byte of bytecode: 200 gas
-- Example: 28-byte contract costs ~26,600 gas
+- Example: 28-byte contract requires 26,600 gas
+
+The command fails if `--gas-limit` is lower than required gas.
 
 **Contract address calculation:**
 ```
@@ -683,7 +688,7 @@ main:
 
 Deploy:
 ```bash
-$ minichain deploy --from alice --source storage_test.asm
+$ minichain deploy --from alice --source storage_test.asm --gas-limit 80000
 
 Deploying contract...
   Compiling: storage_test.asm
@@ -808,10 +813,12 @@ Common errors and solutions:
 | Error | Solution |
 |-------|----------|
 | "Insufficient balance" | Check balance with `account balance`, ensure enough for amount + gas |
+| "Gas limit too low" | Increase `deploy --gas-limit` to at least `21,000 + (bytecode_len * 200)` |
 | "Keypair file not found" | Verify the keypair name (without `.json`) and data directory |
 | "Address is not an authority" | Use correct authority keypair for `block produce` |
 | "Invalid nonce" | Another transaction is pending; wait for block production |
 | "Address is not a contract" | Double-check the contract address; may not be deployed yet |
+| "Failed to submit transaction" | Read the printed error details and fix validation failures (balance/nonce/target) |
 
 ### Scripting Workflows
 
@@ -828,7 +835,7 @@ minichain init --authorities 1
 minichain account new --name deployer
 
 # Deploy contract
-minichain deploy --from deployer --source contract.asm
+minichain deploy --from deployer --source contract.asm --gas-limit 80000
 
 # Produce block
 minichain block produce --authority authority_0
