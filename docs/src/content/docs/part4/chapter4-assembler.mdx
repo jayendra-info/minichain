@@ -170,7 +170,7 @@ main:
     SLOAD R1, R0         ; load current value (100 gas)
     LOADI R2, 1          ; constant 1
     ADD R1, R1, R2       ; increment (2 gas)
-    SSTORE R0, R1        ; save back (5000 gas)
+    SSTORE R0, R1        ; save back (5000-20000 gas)
     HALT                 ; stop execution
 ```
 
@@ -184,7 +184,7 @@ main:
 
 ## 4.2 Instruction Reference
 
-The assembler compiles assembly mnemonics into the VM's 50-instruction set. This section provides a quick overview of the instructions available for assembly programming.
+The assembler compiles assembly mnemonics into the VM's 43-instruction set. This section provides a quick overview of the instructions available for assembly programming.
 
 <Aside type="note" title="Complete Instruction Set Reference">
 For comprehensive documentation including all instructions, syntax, effects, gas costs, and examples, see [Appendix B: Complete Instruction Set Reference](/minichain/appendix/instruction-set).
@@ -194,7 +194,7 @@ For VM implementation details, see [Chapter 3, Section 3.3](/minichain/part3/cha
 
 ### Instruction Categories
 
-The VM supports 50 instructions across 9 categories:
+The VM supports 43 instructions across 9 categories:
 
 | Category | Instructions | Purpose | Example |
 |----------|--------------|---------|---------|
@@ -764,7 +764,7 @@ impl Parser {
 ```
 
 <Aside type="note">
-This is a simplified version showing the pattern. A full parser would handle all 60+ opcodes, but they all follow the same structure: match the token, extract operands, build the AST node.
+This is a simplified version showing the pattern. A full parser handles all opcode variants, but they all follow the same structure: match the token, extract operands, build the AST node.
 </Aside>
 
 ### Error Recovery

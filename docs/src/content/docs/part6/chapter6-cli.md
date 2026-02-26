@@ -780,7 +780,7 @@ Always estimate gas costs before submitting transactions:
 | Deploy (per byte) | 200 |
 | Call (per byte calldata) | 68 |
 | SLOAD | 100 |
-| SSTORE | 5,000 |
+| SSTORE | 5,000-20,000 |
 
 **Example:** Deploying a 100-byte contract with gas price 2:
 ```

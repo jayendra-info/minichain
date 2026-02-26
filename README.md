@@ -39,10 +39,10 @@ Built as an educational project to understand blockchain internals from scratch.
 ### Virtual Machine
 
 - 16 general-purpose registers (R0-R15)
-- 60+ opcodes covering arithmetic, logic, memory, storage, and control flow
+- 40+ opcodes covering arithmetic, logic, memory, storage, and control flow
 - Separate memory (RAM) and storage (disk) operations
 - Gas metering on every operation
-- Stack-based function calls with CALL/RET
+- CALL/RET control-flow opcodes
 
 ### Assembly Language
 
@@ -363,7 +363,7 @@ User → CLI → Blockchain → Mempool → Block Production → Executor → VM
 |-----------|----------|-------|
 | Transfer | 21,000 | Base transaction cost |
 | SLOAD | 100 | Storage read |
-| SSTORE | 5,000 | Storage write |
+| SSTORE | 5,000-20,000 | Storage write (reset vs set) |
 | LOAD64 | 3 | Memory read |
 | STORE64 | 3 | Memory write |
 | ADD/SUB/MUL | 2 | Arithmetic operations |
