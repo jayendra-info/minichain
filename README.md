@@ -123,7 +123,17 @@ cargo run --release -- account new --name bob
 cargo run --release -- account list
 ```
 
-### 3. Deploy a Contract
+### 3. Fund Accounts (Authority Only)
+
+```bash
+# Mint tokens so Alice can pay deployment and call gas
+cargo run --release -- account mint --from authority_0 --to <ALICE_ADDRESS> --amount 50000
+
+# Optional: fund Bob if Bob will send transactions/calls
+cargo run --release -- account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
+```
+
+### 4. Deploy a Contract
 
 Create a simple counter contract (`counter.asm`):
 
@@ -152,7 +162,7 @@ cargo run --release -- deploy --from alice --source counter.asm
 #   Contract Address: 0xa7b3c9e5d1f4a8c2...
 ```
 
-### 4. Produce a Block
+### 5. Produce a Block
 
 ```bash
 cargo run --release -- block produce --authority authority_0
@@ -166,7 +176,7 @@ cargo run --release -- block produce --authority authority_0
 #     Txs:    1
 ```
 
-### 5. Call the Contract
+### 6. Call the Contract
 
 ```bash
 cargo run --release -- call --from alice --to 0xa7b3c9e5d1f4a8c2...
@@ -175,7 +185,7 @@ cargo run --release -- call --from alice --to 0xa7b3c9e5d1f4a8c2...
 cargo run --release -- block produce --authority authority_0
 ```
 
-### 6. Explore the Chain
+### 7. Explore the Chain
 
 ```bash
 # List recent blocks
@@ -194,6 +204,7 @@ cargo run --release -- account balance 0x3f8c2a6e9b5d1f4a...
 |---------|-------------|---------|
 | `init` | Initialize new blockchain | `minichain init --authorities 2` |
 | `account new` | Generate keypair | `minichain account new --name alice` |
+| `account mint` | Mint tokens (authority only) | `minichain account mint --from authority_0 --to 0xABC... --amount 50000` |
 | `account balance` | Query balance | `minichain account balance 0xABC...` |
 | `account info` | Show account details | `minichain account info 0xABC...` |
 | `account list` | List all keypairs | `minichain account list` |
@@ -287,7 +298,11 @@ minichain init --authorities 1
 minichain account new --name alice
 minichain account new --name bob
 
-# 3. Create a storage test contract (storage_test.asm)
+# 3. Fund Alice and Bob with authority key
+minichain account mint --from authority_0 --to <ALICE_ADDRESS> --amount 50000
+minichain account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
+
+# 4. Create a storage test contract (storage_test.asm)
 # .entry main
 # main:
 #     LOADI R0, 0
@@ -297,20 +312,20 @@ minichain account new --name bob
 #     SSTORE R0, R1
 #     HALT
 
-# 4. Deploy contract
+# 5. Deploy contract
 minichain deploy --from alice --source storage_test.asm
 
-# 5. Produce block to include deployment
+# 6. Produce block to include deployment
 minichain block produce --authority authority_0
 
-# 6. Call contract twice
+# 7. Call contract twice
 minichain call --from alice --to 0xa7b3c9e5d1f4a8c2...
 minichain block produce --authority authority_0
 
 minichain call --from bob --to 0xa7b3c9e5d1f4a8c2...
 minichain block produce --authority authority_0
 
-# 7. View blockchain state
+# 8. View blockchain state
 minichain block list
 minichain block info 3
 minichain account info 0xa7b3c9e5d1f4a8c2...

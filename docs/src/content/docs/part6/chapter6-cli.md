@@ -254,6 +254,42 @@ Saved Keypairs:
   authority_1.json: 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
 ```
 
+#### `minichain account mint`
+
+Mint tokens to an address (authority keypair required).
+
+**Usage:**
+```bash
+minichain account mint [OPTIONS]
+```
+
+**Options:**
+- `-d, --data-dir <PATH>`: Blockchain data directory (default: `./data`)
+- `-f, --from <NAME>`: Authority keypair name (without `.json`)
+- `-t, --to <ADDRESS>`: Recipient address (hex format)
+- `-a, --amount <AMOUNT>`: Amount to mint
+
+**What it does:**
+1. Loads the keypair from `data/keys/{from}.json`
+2. Verifies the keypair address is configured as a chain authority
+3. Adds `amount` directly to recipient balance in state
+
+If `--from` is not an authority keypair, the command fails.
+
+**Example:**
+```bash
+$ minichain account mint --from authority_0 --to 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a --amount 50000
+
+Minting tokens...
+
+  Authority: 0xf4a5e8c2b9d7f3a1e6c4b8d2f5a9e7c3b6d4f8a2
+  Recipient: 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
+  Amount:    50000
+
+✓  Minted 50000 tokens
+    New balance: 50000
+```
+
 ### `minichain tx send`
 
 Send a value transfer transaction.
