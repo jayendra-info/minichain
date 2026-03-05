@@ -196,8 +196,12 @@ minichain account balance <ADDRESS>
 $ minichain account balance 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
 
   Address: 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
-  Balance: 10000
+  Balance (MT): 10000
 ```
+
+:::note
+All balances are shown as **Balance (MT)** — the amount in Mini Token, the native cryptocurrency of the Minichain blockchain.
+:::
 
 #### `minichain account info`
 
@@ -215,7 +219,7 @@ $ minichain account info 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
 Account Information:
 
   Address:      0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
-  Balance:      10000
+  Balance (MT): 10000
   Nonce:        5
   Is Contract:  No
 ```
@@ -256,7 +260,7 @@ Saved Keypairs:
 
 #### `minichain account mint`
 
-Mint tokens to an address (authority keypair required).
+Mint Mini Tokens to an address (authority keypair required).
 
 **Usage:**
 ```bash
@@ -280,13 +284,13 @@ If `--from` is not an authority keypair, the command fails.
 ```bash
 $ minichain account mint --from authority_0 --to 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a --amount 50000
 
-Minting tokens...
+Minting...
 
   Authority: 0xf4a5e8c2b9d7f3a1e6c4b8d2f5a9e7c3b6d4f8a2
   Recipient: 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
-  Amount:    50000
+  Amount:    50000 MT
 
-✓  Minted 50000 tokens
+✓  Minted 50000 MT
     New balance: 50000
 ```
 
@@ -321,9 +325,9 @@ Sending transfer transaction...
 
   From:     0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
   To:       0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e
-  Amount:   100
+  Amount:   100 MT
   Nonce:    0
-  Balance:  10000
+  Balance (MT): 10000
 
 ✓  Transaction created
     Hash: 0x2c8f5a9e7b4d1f3a6c2e8b9d5f7a4c1e3b6d9f8a
@@ -639,7 +643,8 @@ $ minichain tx send --from alice --to 0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e
 Sending transfer transaction...
   From:   0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
   To:     0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e
-  Amount: 500
+  Amount: 500 MT
+  Balance (MT): 1000000
 ✓  Transaction submitted to mempool
 ```
 
@@ -660,10 +665,10 @@ Producing new block...
 
 ```bash
 $ minichain account balance 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
-  Balance: 999479  # 1000000 - 500 (transfer) - 21 (gas)
+  Balance (MT): 999479  # 1000000 - 500 (transfer) - 21 (gas)
 
 $ minichain account balance 0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e
-  Balance: 1000500  # 1000000 + 500 (received)
+  Balance (MT): 1000500  # 1000000 + 500 (received)
 ```
 
 ### Step 7: Deploy a contract

@@ -345,7 +345,7 @@ An account represents an entity on the blockchain — either a user or a smart c
 pub struct Account {
     /// Transaction count / sequence number.
     pub nonce: u64,
-    /// Account balance in the native token.
+    /// Account balance in the Mini Token.
     pub balance: u64,
     /// Hash of the contract bytecode (None for EOAs).
     pub code_hash: Option<Hash>,
@@ -935,11 +935,11 @@ While `merkle_root` commits to the **inputs** (transactions), `state_root` commi
 
 ```
 Before Block 5:                     After Block 5:
-┌──────────────────┐               ┌──────────────────┐
-│ Alice: 100 coins │               │ Alice: 70 coins  │  ← sent 30
-│ Bob:   50 coins  │  ──[txs]───►  │ Bob:   80 coins  │  ← received 30
-│ Contract X: ...  │               │ Contract X: ...  │
-└──────────────────┘               └──────────────────┘
+┌────────────────────────┐          ┌────────────────────────┐
+│ Alice: 100 Mini Tokens │          │ Alice: 70 Mini Tokens │  ← sent 30
+│ Bob:   50 Mini Tokens │  ──────►  │ Bob:   80 Mini Tokens │  ← received 30
+│ Contract X: ...        │  [txs]   │ Contract X: ...       │
+└────────────────────────┘          └────────────────────────┘
         ↓                                  ↓
    state_root_4                       state_root_5
 ```
@@ -994,13 +994,13 @@ Transactions are a **list** — simple merkle tree works. Accounts are a **key-v
 Without `state_root`, answering "What's Alice's balance?" would require:
 ```
 Start at genesis → replay Block 1 → replay Block 2 → ... → replay Block 1,000,000
-"Alice has 70 coins"
+"Alice has 70 Mini Tokens"
 ```
 
 With `state_root`, you just:
 ```
 Look up Alice in current state trie → verify proof against state_root
-"Alice has 70 coins" ✓
+"Alice has 70 Mini Tokens" ✓
 ```
 
 The entire history is "compressed" into the latest state. You don't trace back — you look up directly.

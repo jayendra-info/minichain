@@ -52,7 +52,7 @@ enum AccountCommand {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
     },
-    /// Mint tokens (authority only)
+    /// Mint Mini Tokens (authority only)
     Mint {
         /// Directory to store blockchain data
         #[arg(short, long, default_value = "./data")]
@@ -148,7 +148,7 @@ fn check_balance(data_dir: PathBuf, address_str: String) -> Result<()> {
 
     println!();
     println!("  Address: {}", address.to_hex().bright_yellow());
-    println!("  Balance: {}", balance.to_string().bright_cyan());
+    println!("  Balance (MT): {}", balance.to_string().bright_cyan());
     println!();
 
     Ok(())
@@ -170,7 +170,7 @@ fn show_info(data_dir: PathBuf, address_str: String) -> Result<()> {
     println!();
     println!("  Address:      {}", address.to_hex().bright_yellow());
     println!(
-        "  Balance:      {}",
+        "  Balance (MT): {}",
         account.balance.to_string().bright_cyan()
     );
     println!(
@@ -245,7 +245,7 @@ fn mint_tokens(
     to_address_str: String,
     amount: u64,
 ) -> Result<()> {
-    println!("{}", "Minting tokens...".bold().cyan());
+    println!("{}", "Minting Mini Tokens...".bold().cyan());
     println!();
 
     // Load authority keypair
@@ -260,7 +260,7 @@ fn mint_tokens(
 
     if !config.consensus.authorities.contains(&authority_addr) {
         bail!(
-            "Address {} is not an authority. Only authorities can mint tokens.\n\
+            "Address {} is not an authority. Only authorities can mint Mini Tokens.\n\
              Authorities: {}",
             authority_addr.to_hex().bright_yellow(),
             config
@@ -296,11 +296,11 @@ fn mint_tokens(
 
     println!();
     println!(
-        "{}  Minted {} tokens",
+        "{}  Minted {} Mini Tokens",
         "✓".green().bold(),
         amount.to_string().bright_cyan()
     );
-    println!("    New balance: {}", new_balance.to_string().bright_cyan());
+    println!("    New balance: {} MT", new_balance.to_string().bright_cyan());
     println!();
 
     Ok(())

@@ -431,7 +431,7 @@ impl<'a> StateManager<'a> {
 
 ### Why `get_account` Returns Default?
 
-In blockchain, every address *implicitly* exists with zero balance and zero nonce. You can send coins to any address — it doesn't need to be "created" first.
+In blockchain, every address *implicitly* exists with zero balance and zero nonce. You can send Mini Tokens to any address — it doesn't need to be "created" first.
 
 ```rust
 // This is fine — Bob doesn't need to exist yet
@@ -497,7 +497,7 @@ By storing code by hash, identical contracts share storage, and account lookups 
 
 ### 2.3.1 Execution Trace: State Transitions
 
-Let's trace what happens when Alice sends 100 coins to Bob:
+Let's trace what happens when Alice sends 100 Mini Tokens to Bob:
 
 **Initial State:**
 ```

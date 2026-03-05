@@ -140,7 +140,7 @@ fn send_transfer(
     println!("  To:       {}", to.to_hex().bright_yellow());
     println!("  Amount:   {}", amount.to_string().bright_cyan());
     println!("  Nonce:    {}", nonce.to_string().bright_black());
-    println!("  Balance:  {}", balance.to_string().bright_black());
+    println!("  Balance (MT): {}", balance.to_string().bright_black());
     println!();
 
     // Check balance

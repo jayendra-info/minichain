@@ -126,7 +126,7 @@ cargo run --release -- account list
 ### 3. Fund Accounts (Authority Only)
 
 ```bash
-# Mint tokens so Alice can pay deployment and call gas
+# Mint Mini Tokens so Alice can pay deployment and call gas
 cargo run --release -- account mint --from authority_0 --to <ALICE_ADDRESS> --amount 50000
 
 # Optional: fund Bob if Bob will send transactions/calls
@@ -204,7 +204,7 @@ cargo run --release -- account balance 0x3f8c2a6e9b5d1f4a...
 |---------|-------------|---------|
 | `init` | Initialize new blockchain | `minichain init --authorities 2` |
 | `account new` | Generate keypair | `minichain account new --name alice` |
-| `account mint` | Mint tokens (authority only) | `minichain account mint --from authority_0 --to 0xABC... --amount 50000` |
+| `account mint` | Mint Mini Tokens (authority only) | `minichain account mint --from authority_0 --to 0xABC... --amount 50000` |
 | `account balance` | Query balance | `minichain account balance 0xABC...` |
 | `account info` | Show account details | `minichain account info 0xABC...` |
 | `account list` | List all keypairs | `minichain account list` |
