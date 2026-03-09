@@ -1,0 +1,305 @@
+---
+title: "English Auction Smart Contract"
+description: Complete documentation for the English Auction smart contract — storage layout, function dispatch, usage examples, and test coverage.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Overview
+
+The **English Auction** contract (`contracts/auction.asm`) implements an ascending-price auction on the Minichain VM. Bidders compete by placing ever-higher bids; when the timer expires the highest bidder wins and the seller can withdraw the proceeds.
+
+| Property | Value |
+|---|---|
+| Source | `contracts/auction.asm` |
+| Compiled size | ~726 bytes |
+| Storage slots | 7 fixed + 1 per bidder |
+| Gas (init) | < 500 000 |
+
+---
+
+## Participants
+
+| Role | Description |
+|------|------------|
+| **Seller** | Deploys the contract. Receives the winning bid after the auction ends. |
+| **Bidder** | Sends value > 0 to place a bid. If outbid, their funds are credited to a refund ledger and can be withdrawn at any time. |
+
+---
+
+## Storage Layout
+
+All values are stored as **u64 in bytes 24–31** (big-endian) of a 32-byte storage slot.
+
+| Slot | Name | Description |
+|------|------|-------------|
+| 0 | `seller` | Address identifier of the auction creator |
+| 1 | `highest_bid` | Current highest bid amount |
+| 2 | `highest_bidder` | Address identifier of the current leader |
+| 3 | `end_time` | Unix timestamp when bidding closes (`deploy_time + 3600`) |
+| 4 | `reserve_price` | Minimum acceptable bid — hard-coded to **100** |
+| 5 | `ended` | 1 if the auction has been finalized, else 0 |
+| 6 | `min_bid_increment` | Minimum amount by which a new bid must exceed the current highest — hard-coded to **10** |
+| 10 + *k* | `pending_returns[k]` | Refund ledger. *k* = `caller_id mod 2^56` gives each bidder a unique slot |
+
+<Aside type="tip" title="Address Mapping">
+The VM's `CALLER` opcode returns a u64 derived from the first 8 bytes (little-endian) of the caller's 20-byte address. The contract uses this value directly as the bidder identifier and computes a per-bidder storage key as `10 + (caller_id & 0x00FFFFFFFFFFFFFF)`.
+</Aside>
+
+---
+
+## Function Dispatch
+
+The contract uses **`CALLVALUE`** and the **caller identity** to determine which function to execute:
+
+```
+┌──────────────────────┐
+│     Any Transaction   │
+└──────────┬───────────┘
+           │
+     ┌─────▼─────┐
+     │ Initialised?│──No──▶ init()
+     └─────┬──────┘
+           │ Yes
+     ┌─────▼──────────┐
+     │ Time expired &  │──Yes──▶ endAuction()  (auto-finalize)
+     │ ended == 0?     │          then continue…
+     └─────┬───────────┘
+           │ No
+     ┌─────▼─────────┐
+     │ CALLVALUE > 0? │──Yes──▶ bid()
+     └─────┬──────────┘
+           │ No
+     ┌─────▼──────────────┐
+     │ caller == seller?   │──Yes──▶ seller_withdraw()
+     └─────┬───────────────┘
+           │ No
+           ▼
+       withdraw()
+```
+
+### Functions
+
+#### `init()` – First-run Initialization
+
+Triggered automatically on the very first transaction (when `slot 0 == 0`).
+
+| Action | Detail |
+|--------|--------|
+| Store seller | `slot[0] = caller` |
+| Set end time | `slot[3] = timestamp + 3600` |
+| Set reserve price | `slot[4] = 100` |
+| Set min increment | `slot[6] = 10` |
+| Log | Emits `LOG seller_id` |
+
+#### `bid()` – Place a Bid
+
+Called when `CALLVALUE > 0`.
+
+**Preconditions (reverts if any fail):**
+1. `ended == 0` — auction is still active
+2. `CALLVALUE >= reserve_price` (100)
+3. `CALLVALUE >= highest_bid + min_bid_increment`
+
+**Effects:**
+- Previous `highest_bidder`'s amount is added to their `pending_returns` slot
+- `highest_bid = CALLVALUE`
+- `highest_bidder = caller`
+- Logs: `[previous_bidder_id, new_bid, new_bidder_id]` (when outbidding) or `[new_bid, new_bidder_id]` (first bid)
+
+#### `withdraw()` – Claim Refund
+
+Called when `CALLVALUE == 0` and `caller != seller`.
+
+**Preconditions:**
+- `pending_returns[caller] > 0` (reverts if nothing to withdraw)
+
+**Effects:**
+- Reads the caller's pending return amount
+- Zeros the pending return slot
+- Logs: `[amount, caller_id]`
+
+<Aside type="note" title="Pull-over-Push Pattern">
+Refunds are not sent automatically. Each outbid bidder must call `withdraw()` to reclaim their funds. This avoids re-entrancy risks and unbounded gas loops.
+</Aside>
+
+#### `seller_withdraw()` – Seller Claims Proceeds
+
+Called when `CALLVALUE == 0` and `caller == seller`.
+
+**Preconditions:**
+- `ended == 1` — auction must have been finalized (reverts otherwise)
+- `highest_bid > 0` — there must be proceeds (reverts on double withdraw)
+
+**Effects:**
+- Reads `highest_bid`
+- Sets `highest_bid = 0` (prevents double-claim)
+- Logs: `[winning_bid, seller_id]`
+
+#### `endAuction()` – Auto-Finalization
+
+Called automatically at the start of **every** transaction when `timestamp > end_time` and `ended == 0`.
+
+**Effects:**
+- Sets `ended = 1`
+- Logs: `[highest_bid, highest_bidder_id]`
+
+---
+
+## Register Usage
+
+| Register | Purpose |
+|----------|---------|
+| R0 | Storage keys (scratch) |
+| R1 | Storage values / loaded data (scratch) |
+| R2 | Comparisons & arithmetic (scratch) |
+| R3 | Comparison results / flags (scratch) |
+| R4 | `CALLER` — sender address identifier |
+| R5 | `CALLVALUE` — bid amount |
+| R6 | Jump targets |
+| R7 | `TIMESTAMP` — current block timestamp |
+| R8 | Pending returns key/value |
+| R9-R11 | Scratch |
+
+---
+
+## Configuration Constants
+
+These values are hard-coded in the assembly source and can be modified before deployment:
+
+| Constant | Value | Line | Description |
+|----------|-------|------|-------------|
+| `RESERVE_PRICE` | 100 | `LOADI R1, 100` | Minimum acceptable first bid |
+| `MIN_BID_INCREMENT` | 10 | `LOADI R1, 10` | Minimum bid-over-bid increase |
+| `AUCTION_DURATION` | 3600 | `LOADI R2, 3600` | Seconds from deployment to end |
+| `PENDING_RETURNS_BASE` | 10 | `.const PENDING_RETURNS_BASE 10` | First dynamic storage slot |
+
+---
+
+## CLI Usage
+
+<Tabs>
+<TabItem label="Deploy">
+```bash
+# Alice deploys the auction contract
+minichain deploy --from alice --source contracts/auction.asm --gas-limit 500000
+```
+</TabItem>
+<TabItem label="Bid">
+```bash
+# Bob bids 150
+minichain call --from bob --to AUCTION_ADDR --amount 150
+
+# Charlie outbids with 250
+minichain call --from charlie --to AUCTION_ADDR --amount 250
+
+# Produce a block to execute
+minichain block produce --authority authority_0
+```
+</TabItem>
+<TabItem label="Withdraw">
+```bash
+# Bob withdraws refund (150) after being outbid
+minichain call --from bob --to AUCTION_ADDR --amount 0
+
+# After auction ends, Alice (seller) claims proceeds
+minichain call --from alice --to AUCTION_ADDR --amount 0
+```
+</TabItem>
+</Tabs>
+
+---
+
+## Gas Costs
+
+Representative gas costs measured by integration tests:
+
+| Operation | Approximate Gas |
+|-----------|----------------|
+| `init()` | ~170 000 |
+| `bid()` (first bid) | ~130 000 |
+| `bid()` (outbid) | ~210 000 |
+| `withdraw()` | ~120 000 |
+| `seller_withdraw()` | ~140 000 |
+
+All operations stay well under the 5 000 000 gas limit used in tests.
+
+---
+
+## Test Coverage
+
+The contract is exercised by **16 integration tests** in `crates/vm/tests/auction_test.rs`:
+
+| # | Test | What it verifies |
+|---|------|-----------------|
+| 1 | `test_init_sets_storage` | Seller, reserve price, end time, min increment are correctly stored |
+| 2 | `test_first_bid_valid` | A bid ≥ reserve is accepted; highest\_bid and highest\_bidder update |
+| 3 | `test_bid_below_reserve_reverts` | Bid < 100 reverts |
+| 4 | `test_bid_below_min_increment_reverts` | Bid within 10 of current highest reverts |
+| 5 | `test_outbid_credits_pending_returns` | Previous bidder's funds move to pending\_returns |
+| 6 | `test_withdraw_by_outbid_bidder` | Outbid bidder successfully withdraws; slot zeroed |
+| 7 | `test_withdraw_nothing_reverts` | Withdraw with 0 pending reverts |
+| 8 | `test_double_withdraw_reverts` | Second withdraw after claiming reverts |
+| 9 | `test_auto_finalize_on_time_expiry` | Transaction after `end_time` sets `ended = 1` |
+| 10 | `test_bid_after_ended_reverts` | Bidding after finalization reverts |
+| 11 | `test_seller_withdraw_after_end` | Seller claims winning bid; highest\_bid cleared |
+| 12 | `test_seller_double_withdraw_reverts` | Second seller withdraw reverts |
+| 13 | `test_seller_withdraw_before_end_reverts` | Seller cannot withdraw while auction is active |
+| 14 | `test_multiple_bids_accumulate_pending_returns` | Three competing bidders' refunds recorded correctly |
+| 15 | `test_full_happy_path` | End-to-end: init → bids → withdraw → seller claim |
+| 16 | `test_gas_usage_is_bounded` | Init uses > 0 and < 500 000 gas |
+
+Run all tests:
+
+```bash
+cargo test --test auction_test -p minichain-vm
+```
+
+---
+
+## Security Considerations
+
+| Concern | Mitigation |
+|---------|-----------|
+| **Re-entrancy** | Pull-over-push: bidders withdraw explicitly; no callbacks during bid |
+| **Double withdraw** | Pending slot zeroed before logging; seller's `highest_bid` zeroed after read |
+| **Bid after end** | `ended` flag checked at the top of `bid()`; auto-finalize runs before dispatch |
+| **Integer overflow** | All arithmetic uses 64-bit registers; practical bid ranges are well within u64 |
+| **Seller self-bidding** | Not prevented — the seller can bid, but gains no advantage since they already own the item |
+| **No bids** | If no valid bids occur, `highest_bid == 0` and the seller withdraw reverts (nothing to claim) |
+
+---
+
+## Workflow Diagram
+
+```
+  Seller deploys                Bidder A bids 150
+  ─────────────                 ─────────────────
+  ┌──────────┐     time < end   ┌───────────────┐
+  │  init()  │ ───────────────▶ │    bid(150)    │
+  │ seller=S │                  │ highest=150    │
+  │ end=T+1h │                  │ bidder=A       │
+  └──────────┘                  └───────┬────────┘
+                                        │
+               Bidder B bids 250        │  Bidder A outbid
+               ─────────────────        │  pending_returns[A]=150
+               ┌───────────────┐        │
+               │    bid(250)    │◀───────┘
+               │ highest=250    │
+               │ bidder=B       │
+               └───────┬────────┘
+                       │
+        time > end     │  auto-finalize
+        ───────────    │  ended=1
+               ┌───────▼────────┐
+               │  endAuction()  │
+               │  ended = 1     │
+               └───────┬────────┘
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+ ┌────────────┐ ┌──────────────┐ ┌──────────┐
+ │ A.withdraw │ │ seller_with- │ │ B wins!  │
+ │ gets 150   │ │ draw → 250   │ │ (item)   │
+ └────────────┘ └──────────────┘ └──────────┘
+```

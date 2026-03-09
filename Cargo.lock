@@ -839,6 +839,7 @@ dependencies = [
 name = "minichain-vm"
 version = "0.1.0"
 dependencies = [
+ "minichain-assembler",
  "minichain-core",
  "serde",
  "thiserror",

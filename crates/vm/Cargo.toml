@@ -10,3 +10,6 @@ description = "Register-based virtual machine for minichain"
 minichain-core.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+minichain-assembler.workspace = true
