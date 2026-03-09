@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import mermaid from 'astro-mermaid';
 
 // https://astro.build/config
 export default defineConfig({
@@ -111,5 +112,9 @@ export default defineConfig({
 			],
 			customCss: ['./src/styles/custom.css'],
 		}),
+		mermaid({
+			theme: 'forest',
+			autoTheme: true
+		})
 	],
 });

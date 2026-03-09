@@ -17,24 +17,15 @@ We prioritize **learning over production-readiness**. Every component is designe
 
 ## Architecture
 
-```
-┌─────────────┐
-│     CLI     │ ← User interface
-└──────┬──────┘
-       │
-┌──────┴──────┐
-│    Chain    │ ← Orchestration
-└──────┬──────┘
-       │
-┌──────┴──────┬───────────┬───────────┐
-│     VM      │ Consensus │  Storage  │
-└──────┬──────┴─────┬─────┴─────┬─────┘
-       │            │           │
-       └────────────┴───────────┘
-                    │
-              ┌─────┴─────┐
-              │   Core    │ ← Primitives
-              └───────────┘
+```mermaid
+graph TD
+    CLI[CLI<br/>User interface] --> Chain[Chain<br/>Orchestration]
+    Chain --> VM[VM]
+    Chain --> Consensus[Consensus]
+    Chain --> Storage[Storage]
+    VM --> Core[Core<br/>Primitives]
+    Consensus --> Core
+    Storage --> Core
 ```
 
 ## Crate Dependencies

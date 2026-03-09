@@ -933,15 +933,17 @@ Change any transaction → the root changes. This is a **merkle tree** — we'll
 
 While `merkle_root` commits to the **inputs** (transactions), `state_root` commits to the **outputs** (resulting world state after execution).
 
-```
-Before Block 5:                     After Block 5:
-┌──────────────────┐               ┌──────────────────┐
-│ Alice: 100 coins │               │ Alice: 70 coins  │  ← sent 30
-│ Bob:   50 coins  │  ──[txs]───►  │ Bob:   80 coins  │  ← received 30
-│ Contract X: ...  │               │ Contract X: ...  │
-└──────────────────┘               └──────────────────┘
-        ↓                                  ↓
-   state_root_4                       state_root_5
+```mermaid
+graph LR
+    subgraph Before
+        A1[Alice: 100<br/>Bob: 50<br/>Contract X: ...]
+    end
+    
+    subgraph After
+        A2[Alice: 70<br/>Bob: 80<br/>Contract X: ...]
+    end
+    
+    A1 -- txs --> A2
 ```
 
 
@@ -1132,12 +1134,12 @@ The key difference: in a message queue, workers typically process jobs FIFO (fir
 
 Unlike message queues that might wait for a batch to fill, blockchains are **time-driven, not fullness-driven**:
 
-```
-Block interval = 12 seconds
-
-├─ Mempool has 1000 txs? → Produce block with top txs up to gas limit
-├─ Mempool has 5 txs?    → Produce block with those 5 txs
-└─ Mempool is empty?     → Produce empty block (still valid!)
+```mermaid
+flowchart TD
+    Start[Block interval<br/>12 seconds] --> Decision{What's in<br/>mempool?}
+    Decision -->|1000 txs| Full[Produce block with<br/>top txs up to<br/>gas limit]
+    Decision -->|5 txs| Some[Produce block with<br/>those 5 txs]
+    Decision -->|empty| Empty[Produce empty block<br/>still valid!]
 ```
 
 *Think of it like a scheduled bus:* the bus leaves at 9:00 AM whether it's packed or has one passenger. Waiting for a "full" bus would make arrival times unpredictable.
@@ -1166,13 +1168,10 @@ In minichain, the block gas limit would be enforced in the consensus layer when 
 
 Each block references its parent via `prev_hash`:
 
-```
-┌─────────┐    ┌─────────┐    ┌─────────┐
-│ Block 0 │◄───│ Block 1 │◄───│ Block 2 │
-│ Genesis │    │         │    │         │
-└─────────┘    └─────────┘    └─────────┘
-prev_hash=0    prev_hash=     prev_hash=
-               hash(Block0)   hash(Block1)
+```mermaid
+graph LR
+    B0[Block 0<br/>Genesis<br/>prev_hash=0] --> B1[Block 1<br/>prev_hash=hash(Block0)]
+    B1 --> B2[Block 2<br/>prev_hash=hash(Block1)]
 ```
 
 ### Genesis Block
@@ -1228,40 +1227,33 @@ A merkle tree lets us summarize many items into a single hash, with efficient pr
 
 Here's how a 4-transaction merkle tree is constructed:
 
-```
-Transactions:           T0          T1          T2          T3
-                        │           │           │           │
-                        ↓           ↓           ↓           ↓
-Leaf Hashes:         H(T0)       H(T1)       H(T2)       H(T3)
-                        │           │           │           │
-                        └────┬──────┘           └────┬──────┘
-                             │                       │
-                             ↓                       ↓
-Branch Hashes:           H(H(T0)+H(T1))         H(H(T2)+H(T3))
-                             │                       │
-                             └───────────┬───────────┘
-                                         │
-                                         ↓
-Merkle Root:                      H(Branch0+Branch1)
-                                (stored in block header)
+```mermaid
+graph TB
+    T0[T0] --> HT0[H(T0)]
+    T1[T1] --> HT1[H(T1)]
+    T2[T2] --> HT2[H(T2)]
+    T3[T3] --> HT3[H(T3)]
+    
+    HT0 & HT1 --> BH1[H(H(T0)+H(T1))]
+    HT2 & HT3 --> BH2[H(H(T2)+H(T3))]
+    
+    BH1 & BH2 --> Root[Merkle Root<br/>H(Branch0+Branch1)]
 ```
 
 **Proof that T1 is in the block:**
-```
-To prove T1 exists without providing T0, T2, T3:
 
-Prover sends:
-  1. T1 (the transaction data)
-  2. H(T0)           ← Sibling hash
-  3. H(T2+T3)        ← Uncle hash
-
-Verifier computes:
-  Step 1: H(T1) → get transaction hash
-  Step 2: H(T0) + H(T1) → compute H(T0,T1)
-  Step 3: H(T0,T1) + H(T2,T3) → compute Root
-  Step 4: Compare with block header's merkle_root
-
-If match → T1 is in the block ✓
+```mermaid
+graph LR
+    subgraph Prover
+        T1[T1 data] --> H1[H(T1)]
+        H0[H(T0)<br/>sibling] --> Comb1[H(T0)+H(T1)]
+        H23[H(T2+T3)<br/>uncle] --> Comb2[Comb1+H23]
+    end
+    
+    H1 --> Comb1
+    Comb1 --> Comb2
+    Comb2 --> Root[Merkle Root]
+    Root -->|match| OK[✓ Verified]
 ```
 
 <Aside type="tip">

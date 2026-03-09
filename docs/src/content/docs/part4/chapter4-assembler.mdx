@@ -1835,50 +1835,14 @@ Let's see the complete pipeline from assembly source to VM execution.
 
 ### The Complete Pipeline
 
-```
-┌─────────────────┐
-│  Assembly Code  │  counter.asm
-│  (human-written)│
-└────────┬────────┘
-         │
-         │ Lexer
-         ▼
-┌─────────────────┐
-│  Token Stream   │  [LoadI, Register(0), Comma, Number(10), ...]
-└────────┬────────┘
-         │
-         │ Parser
-         ▼
-┌─────────────────┐
-│   AST (Tree)    │  Program { statements: [...], entry: Some("main") }
-└────────┬────────┘
-         │
-         │ Compiler (Pass 1: Collect Labels)
-         ▼
-┌─────────────────┐
-│  Symbol Table   │  { "main": 0x0000, "loop": 0x0014, ... }
-└────────┬────────┘
-         │
-         │ Compiler (Pass 2: Emit Bytecode)
-         ▼
-┌─────────────────┐
-│    Bytecode     │  [0x70, 0x00, 0x0A, 0x00, ..., 0x00]
-│  (binary file)  │
-└────────┬────────┘
-         │
-         │ VM Loader
-         ▼
-┌─────────────────┐
-│   VM Memory     │  Bytecode loaded at address 0
-│                 │  PC = 0, Gas = limit, Registers = [0; 16]
-└────────┬────────┘
-         │
-         │ VM Executor (Fetch-Decode-Execute Loop)
-         ▼
-┌─────────────────┐
-│ Execution       │  Success/Revert, Gas Used, Logs, Storage Changes
-│   Result        │
-└─────────────────┘
+```mermaid
+graph LR
+    Asm[Assembly Code<br/>counter.asm] -->|Lexer| Tokens[Token Stream<br/>[LoadI, R0, 10, ...]]
+    Tokens -->|Parser| AST[AST<br/>Program {...}]
+    AST -->|Pass 1| Sym[Symbol Table<br/>main: 0x0000]
+    Sym -->|Pass 2| Byte[Bytecode<br/>[0x70, 0x00, ...]]
+    Byte -->|Loader| Mem[VM Memory<br/>PC=0, Gas=limit]
+    Mem -->|Executor| Result[Execution Result<br/>Success/Revert]
 ```
 
 ### Example: End-to-End

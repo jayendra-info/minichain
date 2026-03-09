@@ -1003,54 +1003,40 @@ This naive implementation iterates all accounts every time. For a real blockchai
 
 How accounts are organized into a Merkle tree for the state root:
 
-```
-Accounts in Storage:
-┌─────────────────────────────────────────┐
-│ Key: "account:0xAA..."                  │
-│ Value: Account { balance: 1000, ... }  │
-├─────────────────────────────────────────┤
-│ Key: "account:0xBB..."                  │
-│ Value: Account { balance: 500, ... }   │
-├─────────────────────────────────────────┤
-│ Key: "account:0xCC..."                  │
-│ Value: Account { balance: 250, ... }   │
-└─────────────────────────────────────────┘
-
-State Trie Construction:
-                    State Root
-                        │
-        ┌───────────────┼───────────────┐
-        │                               │
-    H(A_key + A_val)              H(B,C combined)
-        │                               │
-    0xAA...                      ┌──────┴──────┐
-    balance=1000                 │             │
-                            H(B_key+B_val) H(C_key+C_val)
-                                 │             │
-                            0xBB...       0xCC...
-                            balance=500   balance=250
-
-Merkle Root Calculation:
-  1. Hash each (key, value) pair
-  2. Sort hashes (deterministic ordering)
-  3. Build binary tree bottom-up
-  4. Root hash = State Root (stored in block header)
+```mermaid
+graph TB
+    subgraph KV[Key-Value Store]
+        AA[account:0xAA...<br/>balance:1000]
+        BB[account:0xBB...<br/>balance:500]
+        CC[account:0xCC...<br/>balance:250]
+    end
+    
+    AA --> HAA[H(A_key+A_val)]
+    BB --> HAB[H(B_key+B_val)]
+    CC --> HAC[H(C_key+C_val)]
+    
+    HAA & HAB --> Branch1[H(A+B combined)]
+    HAC --> Branch2[H(C) - placeholder]
+    
+    Branch1 & Branch2 --> Root[State Root<br/>Merkle Root]
 ```
 
 **What Changes the State Root:**
 
-```
-Initial State:                    After Alice → Bob Transfer:
-    State Root: 0x7d3f...              State Root: 0x9e2a...  [changed]
-         │                                      │
-    ┌────┴────┐                            ┌────┴────┐
-    │         │                            │         │
-  Alice     Bob                          Alice     Bob
-  bal=1000  bal=500                      bal=900   bal=600
-                                          ↑         ↑
-                                        (−100)    (+100)
-
-Because Alice's account changed → her hash changed → branch hash changed → root changed
+```mermaid
+graph LR
+    subgraph Initial[Initial State<br/>State Root: 0x7d3f...]
+        IA[Alice<br/>bal=1000]
+        IB[Bob<br/>bal=500]
+    end
+    
+    subgraph Final[After Transfer<br/>State Root: 0x9e2a...]
+        FA[Alice<br/>bal=900<br/>−100]
+        FB[Bob<br/>bal=600<br/>+100]
+    end
+    
+    IA --> FA
+    IB --> FB
 ```
 
 <Aside type="note" title="Bank Analogy">
