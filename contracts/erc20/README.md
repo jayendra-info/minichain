@@ -11,7 +11,13 @@ cd /path/to/minichain
 cargo run --release -- init --authorities 1
 ```
 
-### 2. Create Test Accounts
+### 2. Mint Tokens to Accounts
+
+```bash
+cargo run --release -- account mint --from authority_0 --to <ALICE_ADDR> --amount 1000000
+```
+
+### 3. Create Test Accounts
 
 ```bash
 cargo run --release -- account new --name alice
@@ -19,7 +25,7 @@ cargo run --release -- account new --name bob
 cargo run --release -- account new --name charlie
 ```
 
-### 3. Deploy Contract
+### 4. Deploy Contract
 
 ```bash
 cargo run --release -- deploy --from alice --source contracts/erc20/erc20.asm
@@ -30,7 +36,7 @@ This will output the contract address. Note it for later use:
 Contract deployed to: 0x1234567890abcdef...
 ```
 
-### 4. Produce First Block
+### 5. Produce First Block
 
 ```bash
 cargo run --release -- block produce --authority authority_0
