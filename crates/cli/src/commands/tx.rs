@@ -5,10 +5,12 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 use minichain_chain::{Blockchain, BlockchainConfig};
 use minichain_consensus::PoAConfig;
-use minichain_core::{Address, Keypair, Transaction};
+use minichain_core::{Address, Transaction};
 use minichain_storage::Storage;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::alias;
 
 #[derive(Args)]
 pub struct TxArgs {
@@ -24,11 +26,11 @@ enum TxCommand {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
 
-        /// Sender keypair file
+        /// Sender keypair alias (@alice) or name (alice)
         #[arg(short, long)]
         from: String,
 
-        /// Recipient address
+        /// Recipient address (0x…) or alias (@bob)
         #[arg(short, long)]
         to: String,
 
@@ -68,38 +70,6 @@ pub fn run(args: TxArgs) -> Result<()> {
     }
 }
 
-fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
-    let key_file = keys_dir.join(format!("{}.json", name));
-    if !key_file.exists() {
-        bail!(
-            "Keypair file not found: {}. Use 'minichain account new' to create one.",
-            key_file.display()
-        );
-    }
-
-    let contents = fs::read_to_string(&key_file)?;
-    let json: serde_json::Value = serde_json::from_str(&contents)?;
-
-    let private_key_hex = json
-        .get("private_key")
-        .and_then(|v| v.as_str())
-        .context("Missing private_key in keypair file")?;
-
-    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
-
-    if private_key_bytes.len() != 32 {
-        bail!(
-            "Invalid private key length: expected 32 bytes, got {}",
-            private_key_bytes.len()
-        );
-    }
-
-    let mut private_key = [0u8; 32];
-    private_key.copy_from_slice(&private_key_bytes);
-
-    Keypair::from_private_key(&private_key).context("Failed to create keypair from private key")
-}
-
 fn send_transfer(
     data_dir: PathBuf,
     from_name: String,
@@ -111,13 +81,11 @@ fn send_transfer(
     println!();
 
     // Load keypair
-    let keys_dir = data_dir.join("keys");
-    let keypair = load_keypair(&keys_dir, &from_name)?;
+    let keypair = alias::load_keypair_by_ref(&data_dir, &from_name)?;
     let from = keypair.address();
 
     // Parse recipient address
-    let to = Address::from_hex(&to_addr)
-        .with_context(|| format!("Invalid recipient address: {}", to_addr))?;
+    let to = alias::resolve_address(&data_dir, &to_addr)?;
 
     // Open storage and get nonce
     let storage = Storage::open(&data_dir).with_context(|| "Failed to open storage")?;

@@ -10,6 +10,8 @@ use minichain_storage::{StateManager, Storage};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::alias;
+
 #[derive(Args)]
 pub struct AccountArgs {
     #[command(subcommand)]
@@ -34,7 +36,7 @@ enum AccountCommand {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
 
-        /// Account address (hex format)
+        /// Account address (0x…) or alias (@alice)
         address: String,
     },
     /// Show account information
@@ -43,7 +45,7 @@ enum AccountCommand {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
 
-        /// Account address (hex format)
+        /// Account address (0x…) or alias (@alice)
         address: String,
     },
     /// List all keypairs
@@ -58,11 +60,11 @@ enum AccountCommand {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
 
-        /// Authority keypair name (without .json extension)
+        /// Authority keypair alias (@authority_0) or name (authority_0)
         #[arg(short, long)]
         from: String,
 
-        /// Recipient address (hex format)
+        /// Recipient address (0x…) or alias (@alice)
         #[arg(short, long)]
         to: String,
 
@@ -136,8 +138,7 @@ fn new_keypair(data_dir: PathBuf, name: Option<String>) -> Result<()> {
 }
 
 fn check_balance(data_dir: PathBuf, address_str: String) -> Result<()> {
-    let address = Address::from_hex(&address_str)
-        .with_context(|| format!("Invalid address format: {}", address_str))?;
+    let address = alias::resolve_address(&data_dir, &address_str)?;
 
     // Open storage
     let storage = Storage::open(&data_dir)
@@ -155,8 +156,7 @@ fn check_balance(data_dir: PathBuf, address_str: String) -> Result<()> {
 }
 
 fn show_info(data_dir: PathBuf, address_str: String) -> Result<()> {
-    let address = Address::from_hex(&address_str)
-        .with_context(|| format!("Invalid address format: {}", address_str))?;
+    let address = alias::resolve_address(&data_dir, &address_str)?;
 
     // Open storage
     let storage = Storage::open(&data_dir)
@@ -221,10 +221,10 @@ fn list_keypairs(data_dir: PathBuf) -> Result<()> {
 
             if let Some(address) = json.get("address").and_then(|v| v.as_str()) {
                 count += 1;
-                let filename = path.file_name().unwrap().to_string_lossy();
+                let stem = path.file_stem().unwrap().to_string_lossy();
                 println!(
                     "  {} {}",
-                    format!("{}:", filename).bright_black(),
+                    format!("@{}:", stem).bright_black(),
                     address.bright_yellow()
                 );
             }
@@ -249,8 +249,7 @@ fn mint_tokens(
     println!();
 
     // Load authority keypair
-    let keys_dir = data_dir.join("keys");
-    let keypair = load_keypair(&keys_dir, &from_name)?;
+    let keypair = alias::load_keypair_by_ref(&data_dir, &from_name)?;
     let authority_addr = keypair.address();
 
     println!("  Authority: {}", authority_addr.to_hex().bright_yellow());
@@ -274,8 +273,7 @@ fn mint_tokens(
     }
 
     // Parse recipient address
-    let to_address = Address::from_hex(&to_address_str)
-        .with_context(|| format!("Invalid address format: {}", to_address_str))?;
+    let to_address = alias::resolve_address(&data_dir, &to_address_str)?;
 
     println!("  Recipient: {}", to_address.to_hex().bright_yellow());
     println!("  Amount:    {}", amount.to_string().bright_cyan());
@@ -304,38 +302,6 @@ fn mint_tokens(
     println!();
 
     Ok(())
-}
-
-fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
-    let key_file = keys_dir.join(format!("{}.json", name));
-    if !key_file.exists() {
-        bail!(
-            "Keypair file not found: {}. Use 'minichain account new' to create one.",
-            key_file.display()
-        );
-    }
-
-    let contents = fs::read_to_string(&key_file)?;
-    let json: serde_json::Value = serde_json::from_str(&contents)?;
-
-    let private_key_hex = json
-        .get("private_key")
-        .and_then(|v| v.as_str())
-        .context("Missing private_key in keypair file")?;
-
-    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
-
-    if private_key_bytes.len() != 32 {
-        bail!(
-            "Invalid private key length: expected 32 bytes, got {}",
-            private_key_bytes.len()
-        );
-    }
-
-    let mut private_key = [0u8; 32];
-    private_key.copy_from_slice(&private_key_bytes);
-
-    Keypair::from_private_key(&private_key).context("Failed to create keypair from private key")
 }
 
 fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
