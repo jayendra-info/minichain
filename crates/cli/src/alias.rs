@@ -90,12 +90,14 @@ pub fn load_keypair_by_ref(data_dir: &Path, input: &str) -> Result<Keypair> {
         n
     } else if input.starts_with("0x") || input.starts_with("0X") {
         bail!(
-            "Cannot sign with a raw address '{}'; use a keypair alias (e.g. @alice or alice)",
+            "Cannot sign with a raw address '{}'; use a keypair alias (e.g. @alice)",
             input
         );
     } else {
-        // backward-compat: bare name without sigil
-        input
+        bail!(
+            "Expected a keypair alias starting with '@' (e.g. @alice), got: '{}'",
+            input
+        );
     };
 
     let keys_dir = data_dir.join("keys");
@@ -279,14 +281,17 @@ mod tests {
     }
 
     #[test]
-    fn load_keypair_bare_name_backward_compat() {
+    fn load_keypair_bare_name_without_sigil_is_rejected() {
         let dir = TempDir::new().unwrap();
         let kp = Keypair::generate();
-        let expected_addr = kp.address();
         write_key_file(&dir, "alice", &kp);
 
-        let loaded = load_keypair_by_ref(dir.path(), "alice").unwrap();
-        assert_eq!(loaded.address(), expected_addr);
+        let err = load_keypair_by_ref(dir.path(), "alice").unwrap_err();
+        assert!(
+            err.to_string().contains("Expected a keypair alias starting with '@'"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
