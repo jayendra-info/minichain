@@ -64,8 +64,7 @@ pub fn resolve_address(data_dir: &Path, input: &str) -> Result<Address> {
         Address::from_hex(addr_str)
             .with_context(|| format!("Invalid address in {}", key_file.display()))
     } else if input.starts_with("0x") || input.starts_with("0X") {
-        Address::from_hex(input)
-            .with_context(|| format!("Invalid address format: {}", input))
+        Address::from_hex(input).with_context(|| format!("Invalid address format: {}", input))
     } else {
         bail!(
             "Expected an address (0x…) or an alias (@name), got: '{}'\n\
@@ -121,8 +120,7 @@ pub fn load_keypair_by_ref(data_dir: &Path, input: &str) -> Result<Keypair> {
         .and_then(|v| v.as_str())
         .with_context(|| format!("Missing 'private_key' in {}", key_file.display()))?;
 
-    let private_key_bytes =
-        hex::decode(private_key_hex).context("Invalid private key hex")?;
+    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
 
     if private_key_bytes.len() != 32 {
         bail!(
@@ -229,8 +227,8 @@ mod tests {
     fn resolve_hex_address_without_0x_prefix_is_rejected() {
         let dir = TempDir::new().unwrap();
         // bare hex without 0x must not be silently accepted as an alias
-        let err = resolve_address(dir.path(), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-            .unwrap_err();
+        let err =
+            resolve_address(dir.path(), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").unwrap_err();
         assert!(err.to_string().contains("Expected an address"));
     }
 
@@ -294,11 +292,8 @@ mod tests {
     #[test]
     fn load_keypair_with_raw_address_is_rejected() {
         let dir = TempDir::new().unwrap();
-        let err = load_keypair_by_ref(
-            dir.path(),
-            "0x0102030405060708090a0b0c0d0e0f1011121314",
-        )
-        .unwrap_err();
+        let err = load_keypair_by_ref(dir.path(), "0x0102030405060708090a0b0c0d0e0f1011121314")
+            .unwrap_err();
         assert!(err.to_string().contains("Cannot sign with a raw address"));
     }
 
