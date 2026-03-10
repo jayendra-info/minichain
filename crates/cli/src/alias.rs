@@ -138,3 +138,182 @@ pub fn load_keypair_by_ref(data_dir: &Path, input: &str) -> Result<Keypair> {
     Keypair::from_private_key(&private_key)
         .with_context(|| format!("Failed to create keypair from {}", key_file.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minichain_core::Keypair;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // ── helpers ────────────────────────────────────────────────────────────────
+
+    /// Write a well-formed key file for `name` under `<dir>/keys/`.
+    fn write_key_file(dir: &TempDir, name: &str, keypair: &Keypair) {
+        let keys_dir = dir.path().join("keys");
+        fs::create_dir_all(&keys_dir).unwrap();
+        let addr = keypair.address();
+        let json = serde_json::json!({
+            "address": addr.to_hex(),
+            "public_key": hex::encode(keypair.public_key.as_bytes()),
+            "private_key": hex::encode(keypair.private_key()),
+        });
+        fs::write(
+            keys_dir.join(format!("{}.json", name)),
+            serde_json::to_string_pretty(&json).unwrap(),
+        )
+        .unwrap();
+    }
+
+    // ── validate_alias_name ────────────────────────────────────────────────────
+
+    #[test]
+    fn valid_alias_names() {
+        for name in &["alice", "Bob", "my-account", "acc123", "A", "x1-y2"] {
+            assert!(
+                validate_alias_name(name).is_ok(),
+                "'{}' should be valid",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn alias_empty_is_invalid() {
+        assert!(validate_alias_name("").is_err());
+    }
+
+    #[test]
+    fn alias_starting_with_digit_is_invalid() {
+        let err = validate_alias_name("0alice").unwrap_err();
+        assert!(err.to_string().contains("must start with a letter"));
+    }
+
+    #[test]
+    fn alias_starting_with_underscore_is_invalid() {
+        let err = validate_alias_name("_alice").unwrap_err();
+        assert!(err.to_string().contains("must start with a letter"));
+    }
+
+    #[test]
+    fn alias_with_whitespace_is_invalid() {
+        let err = validate_alias_name("my account").unwrap_err();
+        assert!(err.to_string().contains("only letters"));
+    }
+
+    #[test]
+    fn alias_with_at_sign_is_invalid() {
+        // '@' should never reach validate_alias_name (it's stripped), but
+        // if it somehow does it must be rejected.
+        assert!(validate_alias_name("@alice").is_err());
+    }
+
+    #[test]
+    fn alias_starting_with_0x_prefix_is_invalid() {
+        // '0' is a digit — should be caught by the first-char check.
+        let err = validate_alias_name("0xdeadbeef").unwrap_err();
+        assert!(err.to_string().contains("must start with a letter"));
+    }
+
+    // ── resolve_address ────────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_hex_address() {
+        let dir = TempDir::new().unwrap();
+        let addr_hex = "0x0102030405060708090a0b0c0d0e0f1011121314";
+        let addr = resolve_address(dir.path(), addr_hex).unwrap();
+        assert_eq!(addr.to_hex(), addr_hex);
+    }
+
+    #[test]
+    fn resolve_hex_address_without_0x_prefix_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        // bare hex without 0x must not be silently accepted as an alias
+        let err = resolve_address(dir.path(), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+            .unwrap_err();
+        assert!(err.to_string().contains("Expected an address"));
+    }
+
+    #[test]
+    fn resolve_alias_returns_correct_address() {
+        let dir = TempDir::new().unwrap();
+        let kp = Keypair::generate();
+        let expected = kp.address();
+        write_key_file(&dir, "alice", &kp);
+
+        let resolved = resolve_address(dir.path(), "@alice").unwrap();
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_alias_unknown_errors_clearly() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("keys")).unwrap();
+        let err = resolve_address(dir.path(), "@nobody").unwrap_err();
+        assert!(err.to_string().contains("Unknown alias '@nobody'"));
+    }
+
+    #[test]
+    fn resolve_alias_invalid_grammar_errors() {
+        let dir = TempDir::new().unwrap();
+        let err = resolve_address(dir.path(), "@0bad").unwrap_err();
+        assert!(err.to_string().contains("must start with a letter"));
+    }
+
+    #[test]
+    fn resolve_bare_text_without_sigil_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let err = resolve_address(dir.path(), "alice").unwrap_err();
+        assert!(err.to_string().contains("Expected an address"));
+    }
+
+    // ── load_keypair_by_ref ────────────────────────────────────────────────────
+
+    #[test]
+    fn load_keypair_with_at_sigil() {
+        let dir = TempDir::new().unwrap();
+        let kp = Keypair::generate();
+        let expected_addr = kp.address();
+        write_key_file(&dir, "alice", &kp);
+
+        let loaded = load_keypair_by_ref(dir.path(), "@alice").unwrap();
+        assert_eq!(loaded.address(), expected_addr);
+    }
+
+    #[test]
+    fn load_keypair_bare_name_backward_compat() {
+        let dir = TempDir::new().unwrap();
+        let kp = Keypair::generate();
+        let expected_addr = kp.address();
+        write_key_file(&dir, "alice", &kp);
+
+        let loaded = load_keypair_by_ref(dir.path(), "alice").unwrap();
+        assert_eq!(loaded.address(), expected_addr);
+    }
+
+    #[test]
+    fn load_keypair_with_raw_address_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let err = load_keypair_by_ref(
+            dir.path(),
+            "0x0102030405060708090a0b0c0d0e0f1011121314",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Cannot sign with a raw address"));
+    }
+
+    #[test]
+    fn load_keypair_unknown_alias_errors_clearly() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("keys")).unwrap();
+        let err = load_keypair_by_ref(dir.path(), "@nobody").unwrap_err();
+        assert!(err.to_string().contains("Keypair file not found"));
+    }
+
+    #[test]
+    fn load_keypair_invalid_grammar_after_at_errors() {
+        let dir = TempDir::new().unwrap();
+        let err = load_keypair_by_ref(dir.path(), "@0bad").unwrap_err();
+        assert!(err.to_string().contains("must start with a letter"));
+    }
+}
