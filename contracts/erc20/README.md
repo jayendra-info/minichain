@@ -28,7 +28,7 @@ cargo run --release -- account new --name charlie
 ### 4. Deploy Contract
 
 ```bash
-cargo run --release -- deploy --from alice --source contracts/erc20/erc20.asm
+cargo run --release -- deploy --from alice --source contracts/erc20/src/erc20.asm
 ```
 
 This will output the contract address. Note it for later use:
@@ -222,7 +222,7 @@ cargo run --release -- account new --name bob
 cargo run --release -- account new --name charlie
 
 # 3. Deploy contract
-cargo run --release -- deploy --from alice --source contracts/erc20/erc20.asm
+cargo run --release -- deploy --from alice --source contracts/erc20/src/erc20.asm
 # Note: Contract address is 0x... (replace with actual)
 
 TOKEN_ADDR="0x..."
@@ -260,15 +260,54 @@ cargo run --release -- call --from alice --to $TOKEN_ADDR --data "07:00000000000
 cargo run --release -- block produce --authority authority_0
 ```
 
-## Testing Script
+## Testing
 
-A bash script is provided for automated testing:
+End-to-end tests are written in TypeScript and run with [Bun](https://bun.sh).
+
+### Prerequisites
+
+- Bun ≥ 1.0
+- A release build of `minichain` (`cargo build --release` from the repo root)
+
+### Run the tests
 
 ```bash
-bash scripts/test_erc20.sh <CONTRACT_ADDRESS>
+cd contracts/erc20
+bun test
 ```
 
-This runs a series of test cases and verifies the contract works correctly.
+The test suite spins up a temporary chain, deploys the contract, and verifies the full ERC20 lifecycle: mint, transfer, approve, transferFrom, and burn.
+
+### Test layout
+
+```
+contracts/erc20/
+├── src/
+│   └── erc20.asm          # Contract source
+└── test/
+    ├── e2e.test.ts         # End-to-end test cases (Bun test runner)
+    ├── contract-client.ts  # Typed ABI + Contract class
+    └── test-utils.ts       # Chain helpers (init, accounts, blocks)
+```
+
+#### `contract-client.ts`
+
+Instead of one function per contract method, the client exposes a typed `ERC20_ABI` object and a generic `Contract` class:
+
+```typescript
+const erc20   = new Contract(dataDir, contractAddress, ERC20_ABI);
+const asAlice = erc20.connect("alice");
+const asBob   = erc20.connect("bob");
+
+// Return type inferred from the ABI: Promise<number>
+const balance = await asAlice.call("balanceOf", { address: 1 });
+
+// Return type inferred as Promise<void>
+await asAlice.call("transfer", { to: 2, amount: 300 });
+await asBob.call("transferFrom", { from: 1, to: 3, amount: 150 });
+```
+
+Argument shapes and return types are fully derived from `ERC20_ABI` at compile time — passing wrong arguments or unknown function names is a TypeScript error.
 
 ## Implementation Details
 
@@ -334,9 +373,9 @@ See [ERC20_DESIGN.md](./ERC20_DESIGN.md) for:
 
 To extend this contract:
 
-1. Edit `erc20.asm` to add new functions
-2. Add function ID to dispatcher
-3. Implement function logic
+1. Edit `src/erc20.asm` to add the new function (dispatcher entry + implementation)
+2. Add the function to `ERC20_ABI` in `test/contract-client.ts`
+3. Add test cases in `test/e2e.test.ts`
 4. Update [ERC20_DESIGN.md](./ERC20_DESIGN.md)
 5. Add test cases to `test_erc20.sh`
 

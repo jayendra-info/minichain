@@ -1,8 +1,4 @@
-import { $ } from "bun";
-
-const REPO_ROOT = import.meta.dir.startsWith("/home/pavitra/Projects/minichain")
-  ? "/home/pavitra/Projects/minichain"
-  : import.meta.dir.replace(/\/contracts\/erc20$/, "");
+const REPO_ROOT = import.meta.dir.replace(/\/contracts\/erc20\/test$/, "");
 export const MINICHAIN_BINARY = `${REPO_ROOT}/target/release/minichain`;
 
 /**

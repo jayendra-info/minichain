@@ -2,7 +2,7 @@ import { runMinichain, produceBlock } from "./test-utils";
 
 const ERC20_CONTRACT_PATH = (() => {
   const base = import.meta.dir.replace(/\/test$/, "");
-  return `${base}/erc20.asm`;
+  return `${base}/src/erc20.asm`;
 })();
 
 // ─── ABI type layer ───────────────────────────────────────────────────────────
