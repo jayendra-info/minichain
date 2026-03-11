@@ -315,9 +315,11 @@ fn list_mempool(data_dir: PathBuf) -> Result<()> {
                     hex[..8].to_string()
                 })
                 .unwrap_or_else(|| "None".to_string());
+            let tx_hash = tx.hash();
             println!(
-                "  {} From: {} To: {} Value: {} Nonce: {}",
+                "  {} Hash: {} From: {} To: {} Value: {} Nonce: {}",
                 format!("{}.", i + 1).bright_black(),
+                tx_hash.to_hex()[..16].bright_green(),
                 tx.from.to_hex()[..8].bright_yellow(),
                 to_str.bright_yellow(),
                 tx.value.to_string().bright_cyan(),
