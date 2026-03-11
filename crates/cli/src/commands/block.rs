@@ -211,6 +211,11 @@ fn produce_block(data_dir: PathBuf, authority_name: String) -> Result<()> {
         .propose_block(&proposer)
         .context("Failed to produce block")?;
 
+    // Import the block into the chain
+    blockchain
+        .import_block(block.clone())
+        .context("Failed to import block")?;
+
     let block_hash = block.hash();
     let new_height = head_height + 1;
 

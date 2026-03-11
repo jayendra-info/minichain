@@ -3,6 +3,7 @@
 //! The mempool stores valid transactions waiting to be included in a block.
 
 use minichain_core::{Address, Hash, Transaction};
+use minichain_storage::Storage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
@@ -65,6 +66,48 @@ impl Mempool {
             by_sender: HashMap::new(),
             tx_hashes: HashSet::new(),
         }
+    }
+
+    /// Load a persistent mempool from storage.
+    ///
+    /// This loads all transactions that were previously stored in the sled database.
+    pub fn load(storage: &Storage, config: MempoolConfig) -> Self {
+        let mut mempool = Self::with_config(config);
+
+        let db = storage.inner();
+        let prefix = b"mempool:tx:";
+
+        for result in db.scan_prefix(prefix) {
+            if let Ok((_key, value)) = result {
+                if let Ok(tx) = bincode::deserialize::<Transaction>(&value) {
+                    let tx_hash = tx.hash();
+                    let from = tx.from;
+
+                    mempool.transactions.insert(tx_hash, tx);
+                    mempool.tx_hashes.insert(tx_hash);
+                    mempool
+                        .by_sender
+                        .entry(from)
+                        .or_default()
+                        .push_back(tx_hash);
+                }
+            }
+        }
+
+        mempool
+    }
+
+    /// Persist a transaction to storage.
+    pub fn persist_tx(&self, storage: &Storage, tx: &Transaction) {
+        let tx_hash = tx.hash();
+        let key = Storage::mempool_tx_key(&tx_hash);
+        let _ = storage.put(key, tx);
+    }
+
+    /// Remove a transaction from storage.
+    pub fn remove_persisted_tx(&self, storage: &Storage, tx_hash: &Hash) {
+        let key = Storage::mempool_tx_key(tx_hash);
+        let _ = storage.delete(key);
     }
 
     /// Get the number of transactions in the mempool.

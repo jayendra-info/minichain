@@ -40,6 +40,18 @@ enum TxCommand {
         #[arg(long, default_value = "1")]
         gas_price: u64,
     },
+    /// Clear the mempool (removes all pending transactions)
+    Clear {
+        /// Directory to store blockchain data
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+    },
+    /// List pending transactions in the mempool
+    List {
+        /// Directory to store blockchain data
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+    },
 }
 
 pub fn run(args: TxArgs) -> Result<()> {
@@ -51,6 +63,8 @@ pub fn run(args: TxArgs) -> Result<()> {
             amount,
             gas_price,
         } => send_transfer(data_dir, from, to, amount, gas_price),
+        TxCommand::Clear { data_dir } => clear_mempool(data_dir),
+        TxCommand::List { data_dir } => list_mempool(data_dir),
     }
 }
 
@@ -240,6 +254,82 @@ fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<
             blockchain.register_authority(address, public_key);
         }
     }
+
+    Ok(())
+}
+
+fn clear_mempool(data_dir: PathBuf) -> Result<()> {
+    let storage = Storage::open(&data_dir)
+        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+
+    let db = storage.inner();
+    let prefix = b"mempool:tx:";
+
+    let mut count = 0;
+    for result in db.scan_prefix(prefix) {
+        if let Ok((key, _)) = result {
+            let _ = db.remove(key);
+            count += 1;
+        }
+    }
+
+    println!();
+    if count > 0 {
+        println!(
+            "{}  Cleared {} pending transaction(s) from mempool",
+            "✓".green().bold(),
+            count
+        );
+    } else {
+        println!("{}  Mempool is already empty", "✓".green().bold());
+    }
+    println!();
+
+    Ok(())
+}
+
+fn list_mempool(data_dir: PathBuf) -> Result<()> {
+    let storage = Storage::open(&data_dir)
+        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+
+    let db = storage.inner();
+    let prefix = b"mempool:tx:";
+
+    let mut transactions = Vec::new();
+    for result in db.scan_prefix(prefix) {
+        if let Ok((_key, value)) = result {
+            if let Ok(tx) = bincode::deserialize::<Transaction>(&value) {
+                transactions.push(tx);
+            }
+        }
+    }
+
+    println!();
+    println!("{}", "Pending Transactions:".bold().cyan());
+    println!();
+
+    if transactions.is_empty() {
+        println!("  (no pending transactions)");
+    } else {
+        for (i, tx) in transactions.iter().enumerate() {
+            let to_str = tx
+                .to
+                .map(|a| {
+                    let hex = a.to_hex();
+                    hex[..8].to_string()
+                })
+                .unwrap_or_else(|| "None".to_string());
+            println!(
+                "  {} From: {} To: {} Value: {} Nonce: {}",
+                format!("{}.", i + 1).bright_black(),
+                tx.from.to_hex()[..8].bright_yellow(),
+                to_str.bright_yellow(),
+                tx.value.to_string().bright_cyan(),
+                tx.nonce.to_string().bright_black()
+            );
+        }
+    }
+    println!();
 
     Ok(())
 }

@@ -3,7 +3,7 @@
 //! This module brings together all components: consensus, storage, mempool, and execution.
 
 use crate::executor::{BlockExecutionResult, Executor};
-use crate::mempool::Mempool;
+use crate::mempool::{Mempool, MempoolConfig};
 use minichain_consensus::{
     Authority, BlockProposer, BlockValidator, PoAConfig, TransactionValidator,
 };
@@ -62,8 +62,7 @@ impl Default for BlockchainConfig {
 /// Main blockchain struct that orchestrates all components.
 pub struct Blockchain<'a> {
     /// Storage backend.
-    #[allow(dead_code)]
-    storage: &'a Storage,
+    storage: Storage,
     /// Chain store for blocks.
     chain: ChainStore<'a>,
     /// State manager for accounts.
@@ -81,11 +80,11 @@ impl<'a> Blockchain<'a> {
     pub fn new(storage: &'a Storage, config: BlockchainConfig) -> Self {
         let chain = ChainStore::new(storage);
         let state = StateManager::new(storage);
-        let mempool = Mempool::new();
+        let mempool = Mempool::load(storage, MempoolConfig::default());
         let authority = Authority::new(config.consensus.clone());
 
         Self {
-            storage,
+            storage: storage.clone(),
             chain,
             state,
             mempool,
@@ -134,7 +133,10 @@ impl<'a> Blockchain<'a> {
         TransactionValidator::validate_transaction(&tx)?;
 
         // Add to mempool
-        self.mempool.add(tx)?;
+        self.mempool.add(tx.clone())?;
+
+        // Persist to storage
+        self.mempool.persist_tx(&self.storage, &tx);
 
         Ok(())
     }
@@ -215,8 +217,11 @@ impl<'a> Blockchain<'a> {
         // Update chain head
         self.chain.set_head(&block_hash, block_height)?;
 
-        // Remove included transactions from mempool
+        // Remove included transactions from mempool and storage
         let tx_hashes: Vec<_> = block.transactions.iter().map(|tx| tx.hash()).collect();
+        for tx_hash in &tx_hashes {
+            self.mempool.remove_persisted_tx(&self.storage, tx_hash);
+        }
         self.mempool.remove_batch(&tx_hashes);
 
         Ok(result)
