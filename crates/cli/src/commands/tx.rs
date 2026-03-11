@@ -266,11 +266,9 @@ fn clear_mempool(data_dir: PathBuf) -> Result<()> {
     let prefix = b"mempool:tx:";
 
     let mut count = 0;
-    for result in db.scan_prefix(prefix) {
-        if let Ok((key, _)) = result {
-            let _ = db.remove(key);
-            count += 1;
-        }
+    for (key, _) in db.scan_prefix(prefix).flatten() {
+        let _ = db.remove(key);
+        count += 1;
     }
 
     println!();
@@ -296,11 +294,9 @@ fn list_mempool(data_dir: PathBuf) -> Result<()> {
     let prefix = b"mempool:tx:";
 
     let mut transactions = Vec::new();
-    for result in db.scan_prefix(prefix) {
-        if let Ok((_key, value)) = result {
-            if let Ok(tx) = bincode::deserialize::<Transaction>(&value) {
-                transactions.push(tx);
-            }
+    for (_key, value) in db.scan_prefix(prefix).flatten() {
+        if let Ok(tx) = bincode::deserialize::<Transaction>(&value) {
+            transactions.push(tx);
         }
     }
 

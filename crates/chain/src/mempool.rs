@@ -77,20 +77,18 @@ impl Mempool {
         let db = storage.inner();
         let prefix = b"mempool:tx:";
 
-        for result in db.scan_prefix(prefix) {
-            if let Ok((_key, value)) = result {
-                if let Ok(tx) = bincode::deserialize::<Transaction>(&value) {
-                    let tx_hash = tx.hash();
-                    let from = tx.from;
+        for result in db.scan_prefix(prefix).flatten() {
+            if let Ok(tx) = bincode::deserialize::<Transaction>(&result.1) {
+                let tx_hash = tx.hash();
+                let from = tx.from;
 
-                    mempool.transactions.insert(tx_hash, tx);
-                    mempool.tx_hashes.insert(tx_hash);
-                    mempool
-                        .by_sender
-                        .entry(from)
-                        .or_default()
-                        .push_back(tx_hash);
-                }
+                mempool.transactions.insert(tx_hash, tx);
+                mempool.tx_hashes.insert(tx_hash);
+                mempool
+                    .by_sender
+                    .entry(from)
+                    .or_default()
+                    .push_back(tx_hash);
             }
         }
 
