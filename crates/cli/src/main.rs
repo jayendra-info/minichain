@@ -25,7 +25,7 @@ fn main() {
         }
         None => {
             println!("minichain - A minimal blockchain implementation");
-            println!("Run 'minichain --help' for usage information.");
+            println!("Run 'minichain --help' for usage information. Test");
         }
     }
 }
