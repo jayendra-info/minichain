@@ -1,5 +1,5 @@
 [build]
 cmd = "cargo build --release"
 
-[deploy]
+[start]
 cmd = "./target/release/minichain-server --data-dir /app/data --port $PORT"
