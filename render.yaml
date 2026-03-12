@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: minichain-server
+    env: rust
+    region: oregon
+    buildCommand: cargo build --release
+    startCommand: ./target/release/minichain-server --data-dir /app/data --port $PORT
+    envVars:
+      - key: RUST_BACKTRACE
+        value: "1"
