@@ -1,14 +1,14 @@
 //! Account management command.
 
-use anyhow::{bail, Context, Result};
-use clap::{Args, Subcommand};
+use anyhow::{ bail, Context, Result };
+use clap::{ Args, Subcommand };
 use colored::Colorize;
 use minichain_chain::BlockchainConfig;
 use minichain_consensus::PoAConfig;
-use minichain_core::{Address, Keypair};
-use minichain_storage::{StateManager, Storage};
+use minichain_core::{ Address, Keypair };
+use minichain_storage::{ StateManager, Storage };
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{ Path, PathBuf };
 
 #[derive(Args)]
 pub struct AccountArgs {
@@ -78,12 +78,8 @@ pub fn run(args: AccountArgs) -> Result<()> {
         AccountCommand::Balance { data_dir, address } => check_balance(data_dir, address),
         AccountCommand::Info { data_dir, address } => show_info(data_dir, address),
         AccountCommand::List { data_dir } => list_keypairs(data_dir),
-        AccountCommand::Mint {
-            data_dir,
-            from,
-            to,
-            amount,
-        } => mint_tokens(data_dir, from, to, amount),
+        AccountCommand::Mint { data_dir, from, to, amount } =>
+            mint_tokens(data_dir, from, to, amount),
     }
 }
 
@@ -95,14 +91,8 @@ fn new_keypair(data_dir: PathBuf, name: Option<String>) -> Result<()> {
     println!("{}", "Generated new keypair:".bold().cyan());
     println!();
     println!("  Address:     {}", address.to_hex().bright_yellow());
-    println!(
-        "  Public Key:  {}",
-        hex::encode(keypair.public_key.as_bytes()).bright_black()
-    );
-    println!(
-        "  Private Key: {}",
-        hex::encode(keypair.private_key()).bright_black()
-    );
+    println!("  Public Key:  {}", hex::encode(keypair.public_key.as_bytes()).bright_black());
+    println!("  Private Key: {}", hex::encode(keypair.private_key()).bright_black());
 
     // Save to file
     let keys_dir = data_dir.join("keys");
@@ -115,7 +105,8 @@ fn new_keypair(data_dir: PathBuf, name: Option<String>) -> Result<()> {
     };
 
     let key_file = keys_dir.join(&filename);
-    let key_json = serde_json::json!({
+    let key_json =
+        serde_json::json!({
         "address": address.to_hex(),
         "public_key": hex::encode(keypair.public_key.as_bytes()),
         "private_key": hex::encode(keypair.private_key()),
@@ -124,11 +115,7 @@ fn new_keypair(data_dir: PathBuf, name: Option<String>) -> Result<()> {
     fs::write(&key_file, serde_json::to_string_pretty(&key_json)?)?;
 
     println!();
-    println!(
-        "{}  Saved to: {}",
-        "✓".green().bold(),
-        key_file.display().to_string().bright_black()
-    );
+    println!("{}  Saved to: {}", "✓".green().bold(), key_file.display().to_string().bright_black());
     println!();
     println!("{}", "Keep your private key safe!".yellow().bold());
 
@@ -136,12 +123,14 @@ fn new_keypair(data_dir: PathBuf, name: Option<String>) -> Result<()> {
 }
 
 fn check_balance(data_dir: PathBuf, address_str: String) -> Result<()> {
-    let address = Address::from_hex(&address_str)
-        .with_context(|| format!("Invalid address format: {}", address_str))?;
+    let address = Address::from_hex(&address_str).with_context(||
+        format!("Invalid address format: {}", address_str)
+    )?;
 
     // Open storage
-    let storage = Storage::open(&data_dir)
-        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+    let storage = Storage::open(&data_dir).with_context(
+        || "Failed to open storage. Did you run 'minichain init'?"
+    )?;
 
     let state = StateManager::new(&storage);
     let balance = state.get_balance(&address)?;
@@ -155,12 +144,14 @@ fn check_balance(data_dir: PathBuf, address_str: String) -> Result<()> {
 }
 
 fn show_info(data_dir: PathBuf, address_str: String) -> Result<()> {
-    let address = Address::from_hex(&address_str)
-        .with_context(|| format!("Invalid address format: {}", address_str))?;
+    let address = Address::from_hex(&address_str).with_context(||
+        format!("Invalid address format: {}", address_str)
+    )?;
 
     // Open storage
-    let storage = Storage::open(&data_dir)
-        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+    let storage = Storage::open(&data_dir).with_context(
+        || "Failed to open storage. Did you run 'minichain init'?"
+    )?;
 
     let state = StateManager::new(&storage);
     let account = state.get_account(&address)?;
@@ -169,22 +160,13 @@ fn show_info(data_dir: PathBuf, address_str: String) -> Result<()> {
     println!("{}", "Account Information:".bold().cyan());
     println!();
     println!("  Address:      {}", address.to_hex().bright_yellow());
-    println!(
-        "  Balance (MT): {}",
-        account.balance.to_string().bright_cyan()
-    );
-    println!(
-        "  Nonce:        {}",
-        account.nonce.to_string().bright_cyan()
-    );
-    println!(
-        "  Is Contract:  {}",
-        if account.is_contract() {
-            "Yes".green()
-        } else {
-            "No".bright_black()
-        }
-    );
+    println!("  Balance (MT): {}", account.balance.to_string().bright_cyan());
+    println!("  Nonce:        {}", account.nonce.to_string().bright_cyan());
+    println!("  Is Contract:  {}", if account.is_contract() {
+        "Yes".green()
+    } else {
+        "No".bright_black()
+    });
 
     if let Some(code_hash) = account.code_hash {
         println!("  Code Hash:    {}", code_hash.to_hex().bright_black());
@@ -200,10 +182,7 @@ fn list_keypairs(data_dir: PathBuf) -> Result<()> {
 
     if !keys_dir.exists() {
         println!("{}", "No keypairs found.".yellow());
-        println!(
-            "Use {} to create a new keypair.",
-            "minichain account new".bright_cyan()
-        );
+        println!("Use {} to create a new keypair.", "minichain account new".bright_cyan());
         return Ok(());
     }
 
@@ -243,7 +222,7 @@ fn mint_tokens(
     data_dir: PathBuf,
     from_name: String,
     to_address_str: String,
-    amount: u64,
+    amount: u64
 ) -> Result<()> {
     println!("{}", "Minting Mini Tokens...".bold().cyan());
     println!();
@@ -263,9 +242,7 @@ fn mint_tokens(
             "Address {} is not an authority. Only authorities can mint Mini Tokens.\n\
              Authorities: {}",
             authority_addr.to_hex().bright_yellow(),
-            config
-                .consensus
-                .authorities
+            config.consensus.authorities
                 .iter()
                 .map(|a| a.to_hex()[..16].to_string())
                 .collect::<Vec<_>>()
@@ -274,32 +251,28 @@ fn mint_tokens(
     }
 
     // Parse recipient address
-    let to_address = Address::from_hex(&to_address_str)
-        .with_context(|| format!("Invalid address format: {}", to_address_str))?;
+    let to_address = Address::from_hex(&to_address_str).with_context(||
+        format!("Invalid address format: {}", to_address_str)
+    )?;
 
     println!("  Recipient: {}", to_address.to_hex().bright_yellow());
     println!("  Amount:    {}", amount.to_string().bright_cyan());
 
     // Open storage and get state
-    let storage = Storage::open(&data_dir)
-        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+    let storage = Storage::open(&data_dir).with_context(
+        || "Failed to open storage. Did you run 'minichain init'?"
+    )?;
 
     let state = StateManager::new(&storage);
 
     // Get current balance and add minted amount
     let current_balance = state.get_balance(&to_address)?;
-    let new_balance = current_balance
-        .checked_add(amount)
-        .context("Overflow: balance too large")?;
+    let new_balance = current_balance.checked_add(amount).context("Overflow: balance too large")?;
 
     state.set_balance(&to_address, new_balance)?;
 
     println!();
-    println!(
-        "{}  Minted {} Mini Tokens",
-        "✓".green().bold(),
-        amount.to_string().bright_cyan()
-    );
+    println!("{}  Minted {} Mini Tokens", "✓".green().bold(), amount.to_string().bright_cyan());
     println!("    New balance: {} MT", new_balance.to_string().bright_cyan());
     println!();
 
@@ -326,10 +299,7 @@ fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
     let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
 
     if private_key_bytes.len() != 32 {
-        bail!(
-            "Invalid private key length: expected 32 bytes, got {}",
-            private_key_bytes.len()
-        );
+        bail!("Invalid private key length: expected 32 bytes, got {}", private_key_bytes.len());
     }
 
     let mut private_key = [0u8; 32];
@@ -340,7 +310,8 @@ fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
 
 fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
     let config_file = data_dir.join("config.json");
-    let contents = fs::read_to_string(&config_file)
+    let contents = fs
+        ::read_to_string(&config_file)
         .context("Failed to read config.json. Did you run 'minichain init'?")?;
 
     let json: serde_json::Value = serde_json::from_str(&contents)?;
@@ -357,7 +328,10 @@ fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let block_time = json.get("block_time").and_then(|v| v.as_u64()).unwrap_or(5);
+    let block_time = json
+        .get("block_time")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5);
 
     let max_block_size = json
         .get("max_block_size")
