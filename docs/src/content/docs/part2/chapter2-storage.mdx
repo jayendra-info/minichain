@@ -1011,33 +1011,45 @@ graph TB
         CC[account:0xCC...<br/>balance:250]
     end
     
-    AA --> HAA[H(A_key+A_val)]
-    BB --> HAB[H(B_key+B_val)]
-    CC --> HAC[H(C_key+C_val)]
+    AA --> HAA["H(A_key+A_val)"]
+    BB --> HAB["H(B_key+B_val)"]
+    CC --> HAC["H(C_key+C_val)"]
     
-    HAA & HAB --> Branch1[H(A+B combined)]
-    HAC --> Branch2[H(C) - placeholder]
+    HAA & HAB --> Branch1["H(A+B combined)"]
+    HAC --> Branch2["H(C) - placeholder"]
     
     Branch1 & Branch2 --> Root[State Root<br/>Merkle Root]
 ```
 
+Merkle Root Calculation:
+  1. Hash each (key, value) pair
+  2. Sort hashes (deterministic ordering)
+  3. Build binary tree bottom-up
+  4. Root hash = State Root (stored in block header)
+
+
 **What Changes the State Root:**
+
+
+Accounts Change -> Hash Changes -> State Root Changes
 
 ```mermaid
 graph LR
-    subgraph Initial[Initial State<br/>State Root: 0x7d3f...]
-        IA[Alice<br/>bal=1000]
-        IB[Bob<br/>bal=500]
+    subgraph Initial["Initial State<br/>"]
+        IRoot[State Root: 0x7d3f...]
+        IRoot --> IA["Alice<br/>bal=1000"]
+        IRoot --> IB["Bob<br/>bal=500"]
     end
     
-    subgraph Final[After Transfer<br/>State Root: 0x9e2a...]
-        FA[Alice<br/>bal=900<br/>−100]
-        FB[Bob<br/>bal=600<br/>+100]
+    subgraph Final["After Transfer<br/>"]
+        FRoot["State Root: 0x9e2a...<br/>"]
+        FRoot --> FA["Alice<br/>bal=900<br/>−100"]
+        FRoot --> FB["Bob<br/>bal=600<br/>+100"]
     end
     
-    IA --> FA
-    IB --> FB
+    Initial --"txn = 100"--> Final
 ```
+
 
 <Aside type="note" title="Bank Analogy">
 The state root is like a bank's **daily closing balance checksum**.

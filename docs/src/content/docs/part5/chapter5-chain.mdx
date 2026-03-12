@@ -60,12 +60,17 @@ But no chassis, no wiring, no control system. The engine can't access fuel. The 
 
 The blockchain layer is the **chassis and control system** that:
 
+```mermaid
+graph TD
+    Txn[User submits transaction] --> Mempool["Mempool (queue)"]
+    Mempool["Mempool (queue)"] --> Validator["Validator (check rules)"]
+    Validator["Validator (check rules)"] --> BlockProducer["Block Producer (authority creates block)"]
+    BlockProducer["Block Producer (authority creates block)"] --> Executor["Executor (run transactions in VM)"]
+    Executor["Executor (run transactions in VM)"] --> Storage["Storage (persist new state)"]
+    Storage["Storage (persist new state)"] --> Block["New block added to chain"]
 ```
-User submits transaction
         ↓
-   Mempool (queue)
-        ↓
-   Validator (check rules)
+   {/* 
         ↓
     Block Producer (authority creates block)
         ↓
@@ -73,8 +78,7 @@ User submits transaction
         ↓
     Storage (persist new state)
         ↓
-   New block added to chain
-```
+   New block added to chain */}
 
 <Aside type="tip" title="Orchestra Analogy">
 Think of the blockchain as a **conductor** leading an orchestra:

@@ -1170,8 +1170,8 @@ Each block references its parent via `prev_hash`:
 
 ```mermaid
 graph LR
-    B0[Block 0<br/>Genesis<br/>prev_hash=0] --> B1[Block 1<br/>prev_hash=hash(Block0)]
-    B1 --> B2[Block 2<br/>prev_hash=hash(Block1)]
+    B0["Block 0<br/>Genesis<br/>prev_hash=0"] --> B1["Block 1<br/>prev_hash=hash(Block0)"]
+    B1 --> B2["Block 2<br/>prev_hash=hash(Block1)"]
 ```
 
 ### Genesis Block
@@ -1229,15 +1229,15 @@ Here's how a 4-transaction merkle tree is constructed:
 
 ```mermaid
 graph TB
-    T0[T0] --> HT0[H(T0)]
-    T1[T1] --> HT1[H(T1)]
-    T2[T2] --> HT2[H(T2)]
-    T3[T3] --> HT3[H(T3)]
+    T0[T0] --> HT0["H(T0)"]
+    T1[T1] --> HT1["H(T1)"]
+    T2[T2] --> HT2["H(T2)"]
+    T3[T3] --> HT3["H(T3)"]
     
-    HT0 & HT1 --> BH1[H(H(T0)+H(T1))]
-    HT2 & HT3 --> BH2[H(H(T2)+H(T3))]
+    HT0 & HT1 --> BH1["H(H(T0)+H(T1))"]
+    HT2 & HT3 --> BH2["H(H(T2)+H(T3))"]
     
-    BH1 & BH2 --> Root[Merkle Root<br/>H(Branch0+Branch1)]
+    BH1 & BH2 --> Root["Merkle Root<br/>H(Branch0+Branch1)"]
 ```
 
 **Proof that T1 is in the block:**
@@ -1245,15 +1245,15 @@ graph TB
 ```mermaid
 graph LR
     subgraph Prover
-        T1[T1 data] --> H1[H(T1)]
-        H0[H(T0)<br/>sibling] --> Comb1[H(T0)+H(T1)]
-        H23[H(T2+T3)<br/>uncle] --> Comb2[Comb1+H23]
+        T1[T1 data] --> H1["H(T1)"]
+        H0["H(T0)<br/>sibling"] --> Comb1["H(T0)+H(T1)"]
+        H23["H(T2+T3)<br/>uncle"] --> Comb2["Comb1+H23"]
     end
     
     H1 --> Comb1
     Comb1 --> Comb2
-    Comb2 --> Root[Merkle Root]
-    Root -->|match| OK[✓ Verified]
+    Comb2 --> Root["Merkle Root"]
+    Root -->|match| OK["✓ Verified"]
 ```
 
 <Aside type="tip">

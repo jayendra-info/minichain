@@ -54,6 +54,24 @@ Before diving into curve families, let's clarify the three main uses of elliptic
     ✓ Eavesdroppers only see public_a and public_b
     ✓ Cannot compute shared without secret_a or secret_b
 ```
+
+```mermaid
+sequenceDiagram
+    participant Alice
+    participant Bob
+
+    Alice->>Alice: Generate secret_a, public_a = secret_a × G
+    Bob->>Bob: Generate secret_b, public_b = secret_b × G
+
+    Alice->>Bob: Send public_a
+    Bob->>Alice: Send public_b
+
+    Alice->>Alice: Compute shared<br/> = secret_a × public_b <br/> = secret_a × secret_b × G
+    Bob->>Bob: Compute shared<br/> = secret_b × public_a <br/> = secret_b × secret_a × G
+
+    Note over Alice,Bob: Both arrive at the same shared secret
+```
+
 ```
 Alice: secret_a, public_a = secret_a × G
 Bob:   secret_b, public_b = secret_b × G
