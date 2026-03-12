@@ -158,7 +158,12 @@ async fn main() {
 
     let state = AppState { data_dir };
 
-    let cors = tower_http::cors::CorsLayer::permissive();
+    use tower_http::cors::{CorsLayer, Any};
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let app = Router::new()
         .route("/health", get(health))
