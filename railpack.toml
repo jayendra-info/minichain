@@ -1,5 +1,10 @@
 [build]
 cmd = "cargo build --release"
 
+[[copy]]
+from = "build"
+src = "target/release"
+dst = "/app/target/release"
+
 [start]
 cmd = "./target/release/minichain-server --data-dir /app/data --port $PORT"
