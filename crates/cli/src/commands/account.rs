@@ -295,8 +295,15 @@ fn mint_tokens(
     state.set_balance(&to_address, new_balance)?;
 
     println!();
-    println!("{}  Minted {} Mini Tokens", "✓".green().bold(), amount.to_string().bright_cyan());
-    println!("    New balance: {} MT", new_balance.to_string().bright_cyan());
+    println!(
+        "{}  Minted {} Mini Tokens",
+        "✓".green().bold(),
+        amount.to_string().bright_cyan()
+    );
+    println!(
+        "    New balance: {} MT",
+        new_balance.to_string().bright_cyan()
+    );
     println!();
 
     Ok(())
