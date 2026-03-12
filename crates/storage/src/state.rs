@@ -30,7 +30,7 @@ impl<'a> StateManager<'a> {
     /// Get an account, returning default (empty) if not found.
     ///
     /// In blockchain, every address implicitly exists with zero balance and nonce.
-    /// You can send Mini Tokens to any address without it being "created" first.
+    /// You can send Mini Coins to any address without it being "created" first.
     pub fn get_account(&self, address: &Address) -> Result<Account> {
         let key = Storage::account_key(address);
         Ok(self.storage.get::<_, Account>(key)?.unwrap_or_default())
