@@ -4,7 +4,7 @@ services:
     env: rust
     region: oregon
     buildCommand: cargo build --release
-    startCommand: ./target/release/minichain-server --data-dir /var/data --port $PORT
+    startCommand: target/release/minichain-server --data-dir /var/data --port $PORT
     envVars:
       - key: RUST_BACKTRACE
         value: "1"
