@@ -5,7 +5,7 @@ use axum::{
 };
 use clap::Parser;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use minichain_server::api::{
     self, AccountInfo, BlockInfo, KeypairInfo, TransactionInfo,
@@ -133,11 +133,11 @@ struct CallRequest {
     gas_price: Option<u64>,
 }
 
-fn get_data_dir(data_dir: &Option<String>) -> PathBuf {
+fn get_data_dir(data_dir: &Option<String>, default: &Path) -> PathBuf {
     data_dir
         .clone()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./data"))
+        .unwrap_or_else(|| default.to_path_buf())
 }
 
 #[derive(Parser)]
@@ -252,7 +252,9 @@ async fn init_blockchain(
     State(state): State<AppState>,
     Json(req): Json<InitRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = req.data_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.data_dir.clone());
     let authorities = req.authorities.unwrap_or(1);
     let block_time = req.block_time.unwrap_or(5);
 
@@ -266,7 +268,9 @@ async fn new_account(
     State(state): State<AppState>,
     Json(req): Json<NewAccountRequest>,
 ) -> Json<ApiResponse<KeypairInfo>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = req.data_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.data_dir.clone());
     match api::create_account(&data_dir, req.name.as_deref()) {
         Ok(info) => Json(ApiResponse::ok(info)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -277,7 +281,7 @@ async fn get_balance(
     State(state): State<AppState>,
     Json(req): Json<BalanceRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::get_balance(&data_dir, &req.address) {
         Ok(balance) => Json(ApiResponse::ok(balance)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -288,7 +292,7 @@ async fn account_info(
     State(state): State<AppState>,
     Json(req): Json<AccountInfoRequest>,
 ) -> Json<ApiResponse<AccountInfo>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::get_account_info(&data_dir, &req.address) {
         Ok(info) => Json(ApiResponse::ok(info)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -299,7 +303,7 @@ async fn list_accounts(
     State(state): State<AppState>,
     Json(req): Json<ListAccountsRequest>,
 ) -> Json<ApiResponse<Vec<KeypairInfo>>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::list_accounts(&data_dir) {
         Ok(accounts) => Json(ApiResponse::ok(accounts)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -310,7 +314,7 @@ async fn mint_tokens(
     State(state): State<AppState>,
     Json(req): Json<MintRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::mint_tokens(&data_dir, &req.from, &req.to, req.amount) {
         Ok(result) => Json(ApiResponse::ok(result)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -321,7 +325,7 @@ async fn send_transaction(
     State(state): State<AppState>,
     Json(req): Json<SendTxRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     let gas_price = req.gas_price.unwrap_or(1);
     match api::send_transaction(&data_dir, &req.from, &req.to, req.amount, gas_price) {
         Ok(hash) => Json(ApiResponse::ok(hash)),
@@ -333,7 +337,7 @@ async fn list_mempool(
     State(state): State<AppState>,
     Json(req): Json<ListAccountsRequest>,
 ) -> Json<ApiResponse<Vec<TransactionInfo>>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::list_mempool(&data_dir) {
         Ok(txs) => Json(ApiResponse::ok(txs)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -344,7 +348,7 @@ async fn clear_mempool(
     State(state): State<AppState>,
     Json(req): Json<ListAccountsRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::clear_mempool(&data_dir) {
         Ok(result) => Json(ApiResponse::ok(result)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -355,7 +359,7 @@ async fn list_blocks(
     State(state): State<AppState>,
     Json(req): Json<BlockListRequest>,
 ) -> Json<ApiResponse<Vec<BlockInfo>>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     let count = req.count.unwrap_or(10);
     match api::list_blocks(&data_dir, count) {
         Ok(blocks) => Json(ApiResponse::ok(blocks)),
@@ -367,7 +371,7 @@ async fn block_info(
     State(state): State<AppState>,
     Json(req): Json<BlockInfoRequest>,
 ) -> Json<ApiResponse<BlockInfo>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::get_block_info(&data_dir, &req.block_id) {
         Ok(info) => Json(ApiResponse::ok(info)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -378,7 +382,7 @@ async fn produce_block(
     State(state): State<AppState>,
     Json(req): Json<ProduceBlockRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::produce_block(&data_dir, &req.authority) {
         Ok(result) => Json(ApiResponse::ok(result)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
@@ -389,7 +393,7 @@ async fn deploy_contract(
     State(state): State<AppState>,
     Json(req): Json<DeployRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     let gas_price = req.gas_price.unwrap_or(1);
     match api::deploy_contract(&data_dir, &req.from, &req.source, gas_price, req.gas_limit) {
         Ok(result) => Json(ApiResponse::ok(result)),
@@ -401,7 +405,7 @@ async fn call_contract(
     State(state): State<AppState>,
     Json(req): Json<CallRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = get_data_dir(&req.data_dir);
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     let gas_price = req.gas_price.unwrap_or(1);
     let amount = req.amount.unwrap_or(0);
     match api::call_contract(&data_dir, &req.from, &req.to, req.data.as_deref(), amount, gas_price) {
