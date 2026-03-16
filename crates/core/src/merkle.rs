@@ -107,8 +107,12 @@ impl MerkleTree {
         let mut idx = index;
 
         for level in &self.levels[..self.levels.len() - 1] {
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
-            let is_right = idx % 2 == 0;
+            let sibling_idx = if idx.is_multiple_of(2) {
+                idx + 1
+            } else {
+                idx - 1
+            };
+            let is_right = idx.is_multiple_of(2);
 
             let sibling = if sibling_idx < level.len() {
                 level[sibling_idx]
