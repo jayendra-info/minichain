@@ -81,7 +81,7 @@ impl<'a> Blockchain<'a> {
     pub fn new(storage: &'a Storage, config: BlockchainConfig) -> Self {
         let chain = ChainStore::new(storage);
         let state = StateManager::new(storage);
-        let mempool = Mempool::load(storage, MempoolConfig::default());
+        let mempool = Mempool::new(storage, MempoolConfig::default());
         let authority = Authority::new(config.consensus.clone());
 
         Self {

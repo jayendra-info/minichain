@@ -55,8 +55,8 @@ pub struct Mempool {
 }
 
 impl Mempool {
-    /// Create a new mempool with default configuration (in-memory only).
-    pub fn new() -> Self {
+    /// Create a new in-memory mempool with default configuration.
+    pub fn new_in_memory() -> Self {
         Self::with_config(MempoolConfig::default())
     }
 
@@ -76,7 +76,7 @@ impl Mempool {
     /// This loads all transactions that were previously stored in the database.
     /// Note: In production, you should verify these transactions haven't been
     /// executed yet by checking the chain. For simplicity, we just load them.
-    pub fn load(storage: &Storage, config: MempoolConfig) -> Self {
+    pub fn new(storage: &Storage, config: MempoolConfig) -> Self {
         let mut mempool = Self {
             storage: storage.prefixed(b"mempool:tx:"),
             config,
@@ -254,7 +254,7 @@ impl Mempool {
 
 impl Default for Mempool {
     fn default() -> Self {
-        Self::new()
+        Self::new_in_memory()
     }
 }
 
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_mempool_add_and_get() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_mempool_duplicate_rejected() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_mempool_remove() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_mempool_by_sender() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn test_mempool_get_by_gas_price() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_mempool_clear() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_mempool_stats() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair1 = Keypair::generate();
         let keypair2 = Keypair::generate();
         let to = Address::from_bytes([2u8; 20]);
