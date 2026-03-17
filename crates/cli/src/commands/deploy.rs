@@ -65,8 +65,18 @@ pub fn run(args: DeployArgs) -> Result<()> {
     let storage = Storage::open(&args.data_dir).with_context(|| "Failed to open storage")?;
 
     let state = minichain_storage::StateManager::new(&storage);
-    let nonce = state.get_nonce(&from)?;
+    let state_nonce = state.get_nonce(&from)?;
     let balance = state.get_balance(&from)?;
+
+    // Load blockchain to get mempool state for correct nonce calculation
+    let config = load_config(&args.data_dir)?;
+    let blockchain = Blockchain::new(&storage, config.clone());
+    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
+    let pending_from_sender: Vec<_> = pending_txs
+        .into_iter()
+        .filter(|tx| tx.from == from)
+        .collect();
+    let nonce = state_nonce + pending_from_sender.len() as u64;
 
     println!("  Deployer:  {}", from.to_hex().bright_yellow());
     println!("  Nonce:     {}", nonce.to_string().bright_black());
@@ -110,8 +120,7 @@ pub fn run(args: DeployArgs) -> Result<()> {
     println!("    Hash: {}", tx_hash.to_hex().bright_yellow());
     println!();
 
-    // Load config and create blockchain
-    let config = load_config(&args.data_dir)?;
+    // Create blockchain (config already loaded above)
     let mut blockchain = Blockchain::new(&storage, config);
 
     // Register authorities

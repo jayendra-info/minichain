@@ -42,6 +42,8 @@ impl Default for MempoolConfig {
 
 /// Transaction mempool.
 pub struct Mempool {
+    /// Storage for persisting transactions.
+    storage: Storage,
     /// Configuration.
     config: MempoolConfig,
     /// Transactions indexed by hash.
@@ -53,14 +55,15 @@ pub struct Mempool {
 }
 
 impl Mempool {
-    /// Create a new mempool with default configuration.
+    /// Create a new mempool with default configuration (in-memory only).
     pub fn new() -> Self {
         Self::with_config(MempoolConfig::default())
     }
 
-    /// Create a new mempool with the given configuration.
+    /// Create a new mempool with the given configuration (in-memory only).
     pub fn with_config(config: MempoolConfig) -> Self {
         Self {
+            storage: Storage::open_temporary().unwrap(),
             config,
             transactions: HashMap::new(),
             by_sender: HashMap::new(),
@@ -68,16 +71,21 @@ impl Mempool {
         }
     }
 
-    /// Load a persistent mempool from storage.
+    /// Load a persistent mempool from storage with the given prefix.
     ///
-    /// This loads all transactions that were previously stored in the sled database.
+    /// This loads all transactions that were previously stored in the database.
+    /// Note: In production, you should verify these transactions haven't been
+    /// executed yet by checking the chain. For simplicity, we just load them.
     pub fn load(storage: &Storage, config: MempoolConfig) -> Self {
-        let mut mempool = Self::with_config(config);
+        let mut mempool = Self {
+            storage: storage.prefixed(b"mempool:tx:"),
+            config,
+            transactions: HashMap::new(),
+            by_sender: HashMap::new(),
+            tx_hashes: HashSet::new(),
+        };
 
-        let db = storage.inner();
-        let prefix = b"mempool:tx:";
-
-        for result in db.scan_prefix(prefix).flatten() {
+        for result in mempool.storage.scan_prefix(&[]) {
             if let Ok(tx) = bincode::deserialize::<Transaction>(&result.1) {
                 let tx_hash = tx.hash();
                 let from = tx.from;
@@ -96,16 +104,14 @@ impl Mempool {
     }
 
     /// Persist a transaction to storage.
-    pub fn persist_tx(&self, storage: &Storage, tx: &Transaction) {
+    pub fn persist_tx(&self, tx: &Transaction) {
         let tx_hash = tx.hash();
-        let key = Storage::mempool_tx_key(&tx_hash);
-        let _ = storage.put(key, tx);
+        let _ = self.storage.put(tx_hash.as_bytes(), tx);
     }
 
     /// Remove a transaction from storage.
-    pub fn remove_persisted_tx(&self, storage: &Storage, tx_hash: &Hash) {
-        let key = Storage::mempool_tx_key(tx_hash);
-        let _ = storage.delete(key);
+    pub fn remove_persisted_tx(&self, tx_hash: &Hash) {
+        let _ = self.storage.delete(tx_hash.as_bytes());
     }
 
     /// Get the number of transactions in the mempool.
@@ -216,14 +222,12 @@ impl Mempool {
 
     /// Get pending transactions for block building.
     ///
-    /// Returns up to `limit` transactions with valid nonces, ordered by gas price.
+    /// Returns transactions sorted by nonce order (for each sender).
     pub fn get_pending(&self, limit: usize) -> Vec<Transaction> {
-        // For simplicity, return transactions ordered by gas price
-        // In a real implementation, this would:
-        // 1. Check nonces against current state
-        // 2. Select transactions that can be executed
-        // 3. Respect account dependencies (nonce ordering)
-        self.get_by_gas_price(limit)
+        let mut txs: Vec<_> = self.transactions.values().cloned().collect();
+        txs.sort_by_key(|tx| tx.nonce);
+        txs.truncate(limit);
+        txs
     }
 
     /// Clear all transactions from the mempool.
