@@ -207,22 +207,6 @@ impl Storage {
     pub fn code_key(code_hash: &Hash) -> String {
         format!("code:{}", code_hash.to_hex())
     }
-
-    /// Key for storing all mempool transactions.
-    /// Format: "mempool:tx:{tx_hash}"
-    pub fn mempool_tx_key(hash: &Hash) -> Vec<u8> {
-        let mut key = b"mempool:tx:".to_vec();
-        key.extend_from_slice(&hash.0);
-        key
-    }
-
-    /// Key for storing mempool sender index.
-    /// Format: "mempool:sender:{address}"
-    pub fn mempool_sender_key(address: &Address) -> Vec<u8> {
-        let mut key = b"mempool:sender:".to_vec();
-        key.extend_from_slice(&address.0);
-        key
-    }
 }
 
 /// Batch operation for atomic updates.
