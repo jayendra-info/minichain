@@ -288,7 +288,8 @@ mod tests {
 
         let err = load_keypair_by_ref(dir.path(), "alice").unwrap_err();
         assert!(
-            err.to_string().contains("Expected a keypair alias starting with '@'"),
+            err.to_string()
+                .contains("Expected a keypair alias starting with '@'"),
             "unexpected error: {}",
             err
         );
