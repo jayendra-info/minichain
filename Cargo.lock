@@ -534,6 +534,7 @@ dependencies = [
 name = "minichain-chain"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "minichain-consensus",
  "minichain-core",
  "minichain-storage",
@@ -546,6 +547,7 @@ name = "minichain-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "clap",
  "colored",
  "ed25519-dalek",

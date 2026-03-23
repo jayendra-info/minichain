@@ -12,3 +12,4 @@ minichain-vm.workspace = true
 minichain-storage.workspace = true
 minichain-consensus.workspace = true
 thiserror.workspace = true
+bincode.workspace = true

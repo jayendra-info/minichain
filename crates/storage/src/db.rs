@@ -36,21 +36,43 @@ pub enum StorageError {
 pub type Result<T> = std::result::Result<T, StorageError>;
 
 /// Wrapper around sled database with serialization helpers.
+#[derive(Clone)]
 pub struct Storage {
     db: Db,
+    prefix: Vec<u8>,
 }
 
 impl Storage {
     /// Open a database at the given path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let db = sled::open(path)?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            prefix: Vec::new(),
+        })
     }
 
     /// Open an in-memory database (for testing).
     pub fn open_temporary() -> Result<Self> {
         let db = sled::Config::new().temporary(true).open()?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            prefix: Vec::new(),
+        })
+    }
+
+    /// Create a new storage with a prefix applied to all keys.
+    pub fn prefixed(&self, prefix: impl AsRef<[u8]>) -> Self {
+        Self {
+            db: self.db.clone(),
+            prefix: prefix.as_ref().to_vec(),
+        }
+    }
+
+    fn with_prefix(&self, key: impl AsRef<[u8]>) -> Vec<u8> {
+        let mut prefixed_key = self.prefix.clone();
+        prefixed_key.extend_from_slice(key.as_ref());
+        prefixed_key
     }
 
     /// Store a serializable value.
@@ -60,7 +82,8 @@ impl Storage {
         V: serde::Serialize,
     {
         let encoded = bincode::serialize(value)?;
-        self.db.insert(key, encoded)?;
+        let prefixed_key = self.with_prefix(key);
+        self.db.insert(prefixed_key, encoded)?;
         Ok(())
     }
 
@@ -70,7 +93,8 @@ impl Storage {
         K: AsRef<[u8]>,
         V: serde::de::DeserializeOwned,
     {
-        match self.db.get(key)? {
+        let prefixed_key = self.with_prefix(key);
+        match self.db.get(prefixed_key)? {
             Some(bytes) => {
                 let value = bincode::deserialize(&bytes)?;
                 Ok(Some(value))
@@ -91,13 +115,27 @@ impl Storage {
 
     /// Delete a key.
     pub fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<()> {
-        self.db.remove(key)?;
+        let prefixed_key = self.with_prefix(key);
+        self.db.remove(prefixed_key)?;
         Ok(())
     }
 
     /// Check if a key exists.
     pub fn contains<K: AsRef<[u8]>>(&self, key: K) -> Result<bool> {
-        Ok(self.db.contains_key(key)?)
+        let prefixed_key = self.with_prefix(key);
+        Ok(self.db.contains_key(prefixed_key)?)
+    }
+
+    /// Scan for keys with the given prefix.
+    pub fn scan_prefix(
+        &self,
+        prefix: impl AsRef<[u8]>,
+    ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
+        let prefixed = self.with_prefix(prefix);
+        self.db
+            .scan_prefix(prefixed)
+            .filter_map(|r| r.ok())
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
     }
 
     /// Get the underlying sled database (for advanced operations like scan_prefix).

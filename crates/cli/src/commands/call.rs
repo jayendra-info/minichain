@@ -61,8 +61,18 @@ pub fn run(args: CallArgs) -> Result<()> {
     let storage = Storage::open(&args.data_dir).with_context(|| "Failed to open storage")?;
 
     let state = minichain_storage::StateManager::new(&storage);
-    let nonce = state.get_nonce(&from)?;
+    let state_nonce = state.get_nonce(&from)?;
     let balance = state.get_balance(&from)?;
+
+    // Load blockchain to get mempool state for correct nonce calculation
+    let config = minichain_chain::BlockchainConfig::default();
+    let blockchain = minichain_chain::Blockchain::new(&storage, config);
+    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
+    let pending_from_sender: Vec<_> = pending_txs
+        .into_iter()
+        .filter(|tx| tx.from == from)
+        .collect();
+    let nonce = state_nonce + pending_from_sender.len() as u64;
 
     // Check if target is a contract
     let target_account = state.get_account(&to)?;

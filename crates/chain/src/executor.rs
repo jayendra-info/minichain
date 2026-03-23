@@ -111,7 +111,7 @@ impl<'a> Executor<'a> {
         let old_nonce = self.state.increment_nonce(sender)?;
         assert_eq!(old_nonce, tx.nonce);
 
-        // Deduct max gas cost
+        // Deduct max cost (value + gas) upfront
         self.state.sub_balance(sender, max_cost)?;
 
         // Execute based on transaction type
@@ -120,12 +120,14 @@ impl<'a> Executor<'a> {
         } else if tx.is_call() {
             self.execute_call(tx)?
         } else {
-            self.execute_transfer(tx)?
+            // For transfer: just add value to recipient (sender already deducted in max_cost)
+            self.execute_transfer_without_sender_deduction(tx)?
         };
 
-        // Refund unused gas
-        let gas_cost = gas_used * tx.gas_price;
-        let refund = max_cost - gas_cost;
+        // Refund unused gas (max_cost includes value + gas, so refund is gas - actual_gas)
+        let refund = max_cost
+            .saturating_sub(tx.value)
+            .saturating_sub(gas_used * tx.gas_price);
         if refund > 0 {
             self.state.add_balance(sender, refund)?;
         }
@@ -139,16 +141,17 @@ impl<'a> Executor<'a> {
         })
     }
 
-    /// Execute a transfer transaction.
-    fn execute_transfer(
+    /// Execute transfer where sender balance is already deducted (just add to recipient).
+    /// This is used when executor deducts max_cost (value + gas) upfront.
+    fn execute_transfer_without_sender_deduction(
         &self,
         tx: &Transaction,
     ) -> Result<(bool, u64, Option<Address>, Option<String>)> {
         let to = tx.to.expect("transfer must have recipient");
 
-        // Transfer value
+        // Just add value to recipient (sender already deducted in max_cost)
         if tx.value > 0 {
-            self.state.transfer(&tx.from, &to, tx.value)?;
+            self.state.add_balance(&to, tx.value)?;
         }
 
         // Transfer uses 21,000 gas
@@ -284,7 +287,7 @@ mod tests {
         let sender_balance = state.get_balance(&from).unwrap();
         let recipient_balance = state.get_balance(&to).unwrap();
 
-        // Sender: 100_000 - 1000 (transfer) - 21_000 (gas)
+        // Sender: 100_000 - 22000 (value+gas) = 78000
         assert_eq!(sender_balance, 78_000);
         assert_eq!(recipient_balance, 1000);
 

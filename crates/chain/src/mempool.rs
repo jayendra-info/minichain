@@ -3,6 +3,7 @@
 //! The mempool stores valid transactions waiting to be included in a block.
 
 use minichain_core::{Address, Hash, Transaction};
+use minichain_storage::Storage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
@@ -41,6 +42,8 @@ impl Default for MempoolConfig {
 
 /// Transaction mempool.
 pub struct Mempool {
+    /// Storage for persisting transactions.
+    storage: Storage,
     /// Configuration.
     config: MempoolConfig,
     /// Transactions indexed by hash.
@@ -52,19 +55,63 @@ pub struct Mempool {
 }
 
 impl Mempool {
-    /// Create a new mempool with default configuration.
-    pub fn new() -> Self {
+    /// Create a new in-memory mempool with default configuration.
+    pub fn new_in_memory() -> Self {
         Self::with_config(MempoolConfig::default())
     }
 
-    /// Create a new mempool with the given configuration.
+    /// Create a new mempool with the given configuration (in-memory only).
     pub fn with_config(config: MempoolConfig) -> Self {
         Self {
+            storage: Storage::open_temporary().unwrap(),
             config,
             transactions: HashMap::new(),
             by_sender: HashMap::new(),
             tx_hashes: HashSet::new(),
         }
+    }
+
+    /// Load a persistent mempool from storage with the given prefix.
+    ///
+    /// This loads all transactions that were previously stored in the database.
+    /// Note: In production, you should verify these transactions haven't been
+    /// executed yet by checking the chain. For simplicity, we just load them.
+    pub fn new(storage: &Storage, config: MempoolConfig) -> Self {
+        let mut mempool = Self {
+            storage: storage.prefixed(b"mempool:tx:"),
+            config,
+            transactions: HashMap::new(),
+            by_sender: HashMap::new(),
+            tx_hashes: HashSet::new(),
+        };
+
+        for result in mempool.storage.scan_prefix(&[]) {
+            if let Ok(tx) = bincode::deserialize::<Transaction>(&result.1) {
+                let tx_hash = tx.hash();
+                let from = tx.from;
+
+                mempool.transactions.insert(tx_hash, tx);
+                mempool.tx_hashes.insert(tx_hash);
+                mempool
+                    .by_sender
+                    .entry(from)
+                    .or_default()
+                    .push_back(tx_hash);
+            }
+        }
+
+        mempool
+    }
+
+    /// Persist a transaction to storage.
+    pub fn persist_tx(&self, tx: &Transaction) {
+        let tx_hash = tx.hash();
+        let _ = self.storage.put(tx_hash.as_bytes(), tx);
+    }
+
+    /// Remove a transaction from storage.
+    pub fn remove_persisted_tx(&self, tx_hash: &Hash) {
+        let _ = self.storage.delete(tx_hash.as_bytes());
     }
 
     /// Get the number of transactions in the mempool.
@@ -175,14 +222,12 @@ impl Mempool {
 
     /// Get pending transactions for block building.
     ///
-    /// Returns up to `limit` transactions with valid nonces, ordered by gas price.
+    /// Returns transactions sorted by nonce order (for each sender).
     pub fn get_pending(&self, limit: usize) -> Vec<Transaction> {
-        // For simplicity, return transactions ordered by gas price
-        // In a real implementation, this would:
-        // 1. Check nonces against current state
-        // 2. Select transactions that can be executed
-        // 3. Respect account dependencies (nonce ordering)
-        self.get_by_gas_price(limit)
+        let mut txs: Vec<_> = self.transactions.values().cloned().collect();
+        txs.sort_by_key(|tx| tx.nonce);
+        txs.truncate(limit);
+        txs
     }
 
     /// Clear all transactions from the mempool.
@@ -209,7 +254,7 @@ impl Mempool {
 
 impl Default for Mempool {
     fn default() -> Self {
-        Self::new()
+        Self::new_in_memory()
     }
 }
 
@@ -231,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_mempool_add_and_get() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -247,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_mempool_duplicate_rejected() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -263,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_mempool_remove() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -282,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_mempool_by_sender() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -301,7 +346,7 @@ mod tests {
 
     #[test]
     fn test_mempool_get_by_gas_price() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -347,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_mempool_clear() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
@@ -363,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_mempool_stats() {
-        let mut mempool = Mempool::new();
+        let mut mempool = Mempool::new_in_memory();
         let keypair1 = Keypair::generate();
         let keypair2 = Keypair::generate();
         let to = Address::from_bytes([2u8; 20]);

@@ -3,7 +3,7 @@
 //! This module brings together all components: consensus, storage, mempool, and execution.
 
 use crate::executor::{BlockExecutionResult, Executor};
-use crate::mempool::Mempool;
+use crate::mempool::{Mempool, MempoolConfig};
 use minichain_consensus::{
     Authority, BlockProposer, BlockValidator, PoAConfig, TransactionValidator,
 };
@@ -61,8 +61,8 @@ impl Default for BlockchainConfig {
 
 /// Main blockchain struct that orchestrates all components.
 pub struct Blockchain<'a> {
-    /// Storage backend.
     #[allow(dead_code)]
+    /// Storage backend (borrowed from caller, kept alive for ChainStore and StateManager).
     storage: &'a Storage,
     /// Chain store for blocks.
     chain: ChainStore<'a>,
@@ -81,7 +81,7 @@ impl<'a> Blockchain<'a> {
     pub fn new(storage: &'a Storage, config: BlockchainConfig) -> Self {
         let chain = ChainStore::new(storage);
         let state = StateManager::new(storage);
-        let mempool = Mempool::new();
+        let mempool = Mempool::new(storage, MempoolConfig::default());
         let authority = Authority::new(config.consensus.clone());
 
         Self {
@@ -134,7 +134,10 @@ impl<'a> Blockchain<'a> {
         TransactionValidator::validate_transaction(&tx)?;
 
         // Add to mempool
-        self.mempool.add(tx)?;
+        self.mempool.add(tx.clone())?;
+
+        // Persist to storage
+        self.mempool.persist_tx(&tx);
 
         Ok(())
     }
@@ -215,8 +218,11 @@ impl<'a> Blockchain<'a> {
         // Update chain head
         self.chain.set_head(&block_hash, block_height)?;
 
-        // Remove included transactions from mempool
+        // Remove included transactions from mempool and storage
         let tx_hashes: Vec<_> = block.transactions.iter().map(|tx| tx.hash()).collect();
+        for tx_hash in &tx_hashes {
+            self.mempool.remove_persisted_tx(tx_hash);
+        }
         self.mempool.remove_batch(&tx_hashes);
 
         Ok(result)
@@ -354,6 +360,50 @@ mod tests {
         assert_eq!(result.receipts.len(), 1);
         assert_eq!(blockchain.height().unwrap(), 1);
         assert_eq!(blockchain.mempool.len(), 0); // Transaction removed from mempool
+        assert_eq!(blockchain.state.get_nonce(&from).unwrap(), 1); // Nonce incremented
+    }
+
+    #[test]
+    fn test_nonce_persistence_across_storage_instances() {
+        let keypair = Keypair::generate();
+        let addr = keypair.address();
+
+        let storage = Storage::open_temporary().unwrap();
+
+        let config = BlockchainConfig {
+            consensus: PoAConfig::new(vec![addr], 5),
+            max_block_size: 100,
+        };
+
+        // First instance: create blockchain and import block
+        let mut blockchain = Blockchain::new(&storage, config.clone());
+        blockchain.register_authority(addr, keypair.public_key.clone());
+
+        let mut genesis = Block::genesis(addr);
+        genesis.header.timestamp -= 10;
+        genesis.sign(&keypair);
+        blockchain.init_genesis(&genesis).unwrap();
+
+        // Fund account
+        blockchain
+            .state
+            .put_account(&addr, &minichain_core::Account::new_user(1_000_000))
+            .unwrap();
+
+        // Add transaction
+        let to = Address::from_bytes([2u8; 20]);
+        let tx = Transaction::transfer(addr, to, 1000, 0, 1).signed(&keypair);
+        blockchain.submit_transaction(tx).unwrap();
+
+        // Create proposer and produce block
+        let proposer = BlockProposer::new(keypair, config.consensus.clone());
+        let block = blockchain.propose_block(&proposer).unwrap();
+        blockchain.import_block(block).unwrap();
+
+        // Second instance: create new blockchain with same storage and check nonce
+        let blockchain2 = Blockchain::new(&storage, config);
+        let nonce = blockchain2.state.get_nonce(&addr).unwrap();
+        assert_eq!(nonce, 1, "Nonce should persist across storage instances");
     }
 
     #[test]

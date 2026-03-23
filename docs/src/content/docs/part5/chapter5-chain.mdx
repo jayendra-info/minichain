@@ -1022,7 +1022,7 @@ impl Blockchain {
     /// Create a new blockchain
     pub fn new(storage: Storage, consensus: PoAConfig) -> Self {
         let executor = Executor::new(&storage);
-        let mempool = Mempool::new(1000); // Max 1000 pending transactions
+        let mempool = Mempool::new_in_memory();
 
         Self {
             storage,

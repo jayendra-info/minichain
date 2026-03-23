@@ -40,6 +40,18 @@ enum TxCommand {
         #[arg(long, default_value = "1")]
         gas_price: u64,
     },
+    /// Clear the mempool (removes all pending transactions)
+    Clear {
+        /// Directory to store blockchain data
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+    },
+    /// List pending transactions in the mempool
+    List {
+        /// Directory to store blockchain data
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+    },
 }
 
 pub fn run(args: TxArgs) -> Result<()> {
@@ -51,6 +63,8 @@ pub fn run(args: TxArgs) -> Result<()> {
             amount,
             gas_price,
         } => send_transfer(data_dir, from, to, amount, gas_price),
+        TxCommand::Clear { data_dir } => clear_mempool(data_dir),
+        TxCommand::List { data_dir } => list_mempool(data_dir),
     }
 }
 
@@ -109,8 +123,18 @@ fn send_transfer(
     let storage = Storage::open(&data_dir).with_context(|| "Failed to open storage")?;
 
     let state = minichain_storage::StateManager::new(&storage);
-    let nonce = state.get_nonce(&from)?;
+    let state_nonce = state.get_nonce(&from)?;
     let balance = state.get_balance(&from)?;
+
+    // Load blockchain to get mempool state for correct nonce calculation
+    let config = load_config(&data_dir)?;
+    let blockchain = Blockchain::new(&storage, config);
+    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
+    let pending_from_sender: Vec<_> = pending_txs
+        .into_iter()
+        .filter(|tx| tx.from == from)
+        .collect();
+    let nonce = state_nonce + pending_from_sender.len() as u64;
 
     println!("  From:     {}", from.to_hex().bright_yellow());
     println!("  To:       {}", to.to_hex().bright_yellow());
@@ -140,8 +164,7 @@ fn send_transfer(
     println!();
 
     // Load config and create blockchain
-    let config = load_config(&data_dir)?;
-    let mut blockchain = Blockchain::new(&storage, config);
+    let mut blockchain = Blockchain::new(&storage, load_config(&data_dir)?);
 
     // Register authorities
     register_authorities(&mut blockchain, &data_dir)?;
@@ -240,6 +263,80 @@ fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<
             blockchain.register_authority(address, public_key);
         }
     }
+
+    Ok(())
+}
+
+fn clear_mempool(data_dir: PathBuf) -> Result<()> {
+    let storage = Storage::open(&data_dir)
+        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+
+    let db = storage.inner();
+    let prefix = b"mempool:tx:";
+
+    let mut count = 0;
+    for (key, _) in db.scan_prefix(prefix).flatten() {
+        let _ = db.remove(key);
+        count += 1;
+    }
+
+    println!();
+    if count > 0 {
+        println!(
+            "{}  Cleared {} pending transaction(s) from mempool",
+            "✓".green().bold(),
+            count
+        );
+    } else {
+        println!("{}  Mempool is already empty", "✓".green().bold());
+    }
+    println!();
+
+    Ok(())
+}
+
+fn list_mempool(data_dir: PathBuf) -> Result<()> {
+    let storage = Storage::open(&data_dir)
+        .with_context(|| "Failed to open storage. Did you run 'minichain init'?")?;
+
+    let db = storage.inner();
+    let prefix = b"mempool:tx:";
+
+    let mut transactions = Vec::new();
+    for (_key, value) in db.scan_prefix(prefix).flatten() {
+        if let Ok(tx) = bincode::deserialize::<Transaction>(&value) {
+            transactions.push(tx);
+        }
+    }
+
+    println!();
+    println!("{}", "Pending Transactions:".bold().cyan());
+    println!();
+
+    if transactions.is_empty() {
+        println!("  (no pending transactions)");
+    } else {
+        for (i, tx) in transactions.iter().enumerate() {
+            let to_str = tx
+                .to
+                .map(|a| {
+                    let hex = a.to_hex();
+                    hex[..8].to_string()
+                })
+                .unwrap_or_else(|| "None".to_string());
+            let tx_hash = tx.hash();
+            println!(
+                "  {} Hash: {} From: {} To: {} Value: {} Nonce: {}",
+                format!("{}.", i + 1).bright_black(),
+                tx_hash.to_hex()[..16].bright_green(),
+                tx.from.to_hex()[..8].bright_yellow(),
+                to_str.bright_yellow(),
+                tx.value.to_string().bright_cyan(),
+                tx.nonce.to_string().bright_black()
+            );
+        }
+    }
+    println!();
 
     Ok(())
 }
