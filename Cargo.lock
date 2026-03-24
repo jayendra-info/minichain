@@ -814,6 +814,7 @@ dependencies = [
  "minichain-storage",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tower 0.4.13",

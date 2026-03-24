@@ -245,8 +245,17 @@ pub fn send_transaction(
     let storage = Storage::open(data_dir)?;
     let state = StateManager::new(&storage);
 
-    let nonce = state.get_nonce(&from)?;
+    let state_nonce = state.get_nonce(&from)?;
     let balance = state.get_balance(&from)?;
+
+    let config = load_config(data_dir)?;
+    let blockchain = Blockchain::new(&storage, config.clone());
+    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
+    let pending_from_sender: Vec<_> = pending_txs
+        .into_iter()
+        .filter(|tx| tx.from == from)
+        .collect();
+    let nonce = state_nonce + pending_from_sender.len() as u64;
 
     let total_cost = amount + (21_000 * gas_price);
     if balance < total_cost {
@@ -260,7 +269,6 @@ pub fn send_transaction(
     let tx = Transaction::transfer(from, to, amount, nonce, gas_price).signed(&keypair);
     let tx_hash = tx.hash();
 
-    let config = load_config(data_dir)?;
     let mut blockchain = Blockchain::new(&storage, config);
     register_authorities(&mut blockchain, data_dir)?;
 
@@ -414,7 +422,17 @@ pub fn deploy_contract(
 
     let storage = Storage::open(data_dir)?;
     let state = StateManager::new(&storage);
-    let nonce = state.get_nonce(&from)?;
+
+    let state_nonce = state.get_nonce(&from)?;
+
+    let config = load_config(data_dir)?;
+    let blockchain = Blockchain::new(&storage, config.clone());
+    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
+    let pending_from_sender: Vec<_> = pending_txs
+        .into_iter()
+        .filter(|tx| tx.from == from)
+        .collect();
+    let nonce = state_nonce + pending_from_sender.len() as u64;
 
     let gas_required = 21_000 + (bytecode.len() as u64 * 200);
     if gas_required > gas_limit {
@@ -432,7 +450,6 @@ pub fn deploy_contract(
         .contract_address()
         .expect("deploy tx must have contract address");
 
-    let config = load_config(data_dir)?;
     let mut blockchain = Blockchain::new(&storage, config);
     register_authorities(&mut blockchain, data_dir)?;
 
@@ -468,8 +485,17 @@ pub fn call_contract(
     let storage = Storage::open(data_dir)?;
     let state = StateManager::new(&storage);
 
-    let nonce = state.get_nonce(&from)?;
+    let state_nonce = state.get_nonce(&from)?;
     let target_account = state.get_account(&to)?;
+
+    let config = load_config(data_dir)?;
+    let blockchain = Blockchain::new(&storage, config.clone());
+    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
+    let pending_from_sender: Vec<_> = pending_txs
+        .into_iter()
+        .filter(|tx| tx.from == from)
+        .collect();
+    let nonce = state_nonce + pending_from_sender.len() as u64;
     if !target_account.is_contract() {
         anyhow::bail!("Address {} is not a contract", to.to_hex());
     }
@@ -490,7 +516,6 @@ pub fn call_contract(
         Transaction::call(from, to, calldata, amount, nonce, gas_limit, gas_price).signed(&keypair);
     let tx_hash = tx.hash();
 
-    let config = load_config(data_dir)?;
     let mut blockchain = Blockchain::new(&storage, config);
     register_authorities(&mut blockchain, data_dir)?;
 
@@ -593,4 +618,155 @@ fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn create_test_env() -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+        init_blockchain(&data_dir, 1, 1).unwrap();
+        (temp_dir, data_dir)
+    }
+
+    #[test]
+    fn test_init_blockchain() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+        let result = init_blockchain(&data_dir, 2, 5);
+        assert!(result.is_ok());
+        let config_path = data_dir.join("config.json");
+        assert!(config_path.exists());
+    }
+
+    #[test]
+    fn test_create_account() {
+        let (_temp_dir, data_dir) = create_test_env();
+        let result = create_account(&data_dir, Some("bob"));
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert!(info.address.starts_with("0x"));
+        assert!(info.public_key.len() > 0);
+    }
+
+    #[test]
+    fn test_get_balance() {
+        let (temp_dir, data_dir) = create_test_env();
+        let alice_addr = create_account(&data_dir, Some("alice")).unwrap().address;
+        let balance = get_balance(&data_dir, &alice_addr);
+        assert!(balance.is_ok());
+        assert_eq!(balance.unwrap(), "0");
+        mint_tokens(&data_dir, "authority_0", &alice_addr, 1000).unwrap();
+        let balance = get_balance(&data_dir, &alice_addr).unwrap();
+        assert_eq!(balance, "1000");
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_mint_tokens() {
+        let (temp_dir, data_dir) = create_test_env();
+        let alice_addr = create_account(&data_dir, Some("alice")).unwrap().address;
+        let result = mint_tokens(&data_dir, "authority_0", &alice_addr, 500);
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Minted"));
+        let balance = get_balance(&data_dir, &alice_addr).unwrap();
+        assert_eq!(balance, "500");
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_mint_tokens_from_non_authority() {
+        let (temp_dir, data_dir) = create_test_env();
+        let alice_addr = create_account(&data_dir, Some("alice")).unwrap().address;
+        let result = mint_tokens(&data_dir, "alice", &alice_addr, 100);
+        assert!(result.is_err());
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_send_transaction() {
+        let (temp_dir, data_dir) = create_test_env();
+        let alice_addr = create_account(&data_dir, Some("alice")).unwrap().address;
+        let bob_addr = create_account(&data_dir, Some("bob")).unwrap().address;
+        mint_tokens(&data_dir, "authority_0", &alice_addr, 100000).unwrap();
+        let result = send_transaction(&data_dir, "alice", &bob_addr, 100, 1);
+        assert!(result.is_ok());
+        assert!(result.unwrap().len() > 0);
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_send_transaction_insufficient_balance() {
+        let (temp_dir, data_dir) = create_test_env();
+        create_account(&data_dir, Some("alice")).unwrap();
+        let bob_addr = create_account(&data_dir, Some("bob")).unwrap().address;
+        let result = send_transaction(&data_dir, "alice", &bob_addr, 100, 1);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Insufficient balance"));
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_list_mempool() {
+        let (temp_dir, data_dir) = create_test_env();
+        let alice_addr = create_account(&data_dir, Some("alice")).unwrap().address;
+        let bob_addr = create_account(&data_dir, Some("bob")).unwrap().address;
+        mint_tokens(&data_dir, "authority_0", &alice_addr, 100000).unwrap();
+        send_transaction(&data_dir, "alice", &bob_addr, 50, 1).unwrap();
+        let mempool = list_mempool(&data_dir);
+        assert!(mempool.is_ok());
+        assert_eq!(mempool.unwrap().len(), 1);
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_list_blocks() {
+        let (temp_dir, data_dir) = create_test_env();
+        let blocks = list_blocks(&data_dir, 10);
+        assert!(blocks.is_ok());
+        let blocks = blocks.unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].height, 0);
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_block_info() {
+        let (temp_dir, data_dir) = create_test_env();
+        let info = get_block_info(&data_dir, "0");
+        assert!(info.is_ok());
+        let info = info.unwrap();
+        assert_eq!(info.height, 0);
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_list_accounts() {
+        let (temp_dir, data_dir) = create_test_env();
+        create_account(&data_dir, Some("alice")).unwrap();
+        create_account(&data_dir, Some("bob")).unwrap();
+        let accounts = list_accounts(&data_dir);
+        assert!(accounts.is_ok());
+        assert!(accounts.unwrap().len() >= 2);
+        drop(temp_dir);
+    }
+
+    #[test]
+    fn test_get_account_info() {
+        let (temp_dir, data_dir) = create_test_env();
+        let alice_info = create_account(&data_dir, Some("alice")).unwrap();
+        let info = get_account_info(&data_dir, &alice_info.address);
+        assert!(info.is_ok());
+        let info = info.unwrap();
+        assert_eq!(info.address, alice_info.address);
+        assert_eq!(info.is_contract, false);
+        drop(temp_dir);
+    }
 }
