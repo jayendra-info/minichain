@@ -7,9 +7,7 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use minichain_server::api::{
-    self, AccountInfo, BlockInfo, KeypairInfo, TransactionInfo,
-};
+use minichain_server::api::{self, AccountInfo, BlockInfo, KeypairInfo, TransactionInfo};
 
 #[derive(Clone)]
 struct AppState {
@@ -144,7 +142,7 @@ fn get_data_dir(data_dir: &Option<String>, default: &Path) -> PathBuf {
 struct Args {
     #[arg(long, default_value = "./data")]
     data_dir: String,
-    
+
     #[arg(long, default_value = "3000")]
     port: String,
 }
@@ -158,7 +156,7 @@ async fn main() {
 
     let state = AppState { data_dir };
 
-    use tower_http::cors::{CorsLayer, Any};
+    use tower_http::cors::{Any, CorsLayer};
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -212,7 +210,7 @@ async fn status(State(state): State<AppState>) -> Json<ApiResponse<ChainStatus>>
     let chain = minichain_storage::ChainStore::new(&storage);
     let initialized = chain.is_initialized().unwrap_or(false);
     let height = chain.get_height().unwrap_or(0);
-    
+
     let genesis_hash = if let Ok(Some(genesis)) = chain.get_block_by_height(0) {
         Some(genesis.hash().to_hex())
     } else {
@@ -252,7 +250,8 @@ async fn init_blockchain(
     State(state): State<AppState>,
     Json(req): Json<InitRequest>,
 ) -> Json<ApiResponse<String>> {
-    let data_dir = req.data_dir
+    let data_dir = req
+        .data_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| state.data_dir.clone());
     let authorities = req.authorities.unwrap_or(1);
@@ -268,7 +267,8 @@ async fn new_account(
     State(state): State<AppState>,
     Json(req): Json<NewAccountRequest>,
 ) -> Json<ApiResponse<KeypairInfo>> {
-    let data_dir = req.data_dir
+    let data_dir = req
+        .data_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| state.data_dir.clone());
     match api::create_account(&data_dir, req.name.as_deref()) {
@@ -408,7 +408,14 @@ async fn call_contract(
     let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     let gas_price = req.gas_price.unwrap_or(1);
     let amount = req.amount.unwrap_or(0);
-    match api::call_contract(&data_dir, &req.from, &req.to, req.data.as_deref(), amount, gas_price) {
+    match api::call_contract(
+        &data_dir,
+        &req.from,
+        &req.to,
+        req.data.as_deref(),
+        amount,
+        gas_price,
+    ) {
         Ok(hash) => Json(ApiResponse::ok(hash)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
