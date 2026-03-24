@@ -650,7 +650,7 @@ mod tests {
         assert!(result.is_ok());
         let info = result.unwrap();
         assert!(info.address.starts_with("0x"));
-        assert!(info.public_key.len() > 0);
+        assert!(!info.public_key.is_empty());
     }
 
     #[test]
@@ -695,7 +695,8 @@ mod tests {
         mint_tokens(&data_dir, "authority_0", &alice_addr, 100000).unwrap();
         let result = send_transaction(&data_dir, "alice", &bob_addr, 100, 1);
         assert!(result.is_ok());
-        assert!(result.unwrap().len() > 0);
+        let tx_hash = result.unwrap();
+        assert!(!tx_hash.is_empty());
         drop(temp_dir);
     }
 
@@ -766,7 +767,7 @@ mod tests {
         assert!(info.is_ok());
         let info = info.unwrap();
         assert_eq!(info.address, alice_info.address);
-        assert_eq!(info.is_contract, false);
+        assert!(!info.is_contract);
         drop(temp_dir);
     }
 }
