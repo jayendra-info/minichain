@@ -51,7 +51,7 @@ pub fn init_blockchain(data_dir: &Path, authorities: usize, block_time: u64) -> 
     let chain = ChainStore::new(&storage);
 
     if chain.is_initialized()? {
-        return Ok("Blockchain already initialized".to_string());
+        anyhow::bail!("Blockchain already initialized");
     }
 
     let mut authority_keypairs = Vec::new();
@@ -573,6 +573,15 @@ fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
         consensus: PoAConfig::new(authorities, block_time),
         max_block_size,
     })
+}
+
+const HARDCODED_ADMIN_TOKEN: &str = "minichain_admin_token";
+
+pub fn validate_admin_token(_data_dir: &Path, provided_token: &str) -> Result<()> {
+    if provided_token != HARDCODED_ADMIN_TOKEN {
+        anyhow::bail!("Invalid admin token");
+    }
+    Ok(())
 }
 
 fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<()> {

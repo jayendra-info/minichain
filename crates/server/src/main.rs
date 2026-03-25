@@ -52,6 +52,7 @@ struct InitRequest {
     data_dir: Option<String>,
     authorities: Option<usize>,
     block_time: Option<u64>,
+    admin_token: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -220,18 +221,19 @@ async fn status(State(state): State<AppState>) -> Json<ApiResponse<ChainStatus>>
     let authorities = if state.data_dir.join("config.json").exists() {
         if let Ok(contents) = std::fs::read_to_string(state.data_dir.join("config.json")) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
-                json.get("authorities")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                match json.get("authorities").and_then(|v| v.as_array()) {
+                    Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    None => {
+                        eprintln!("Warning: 'authorities' key missing or invalid in config.json");
+                        vec![]
+                    }
+                }
             } else {
+                eprintln!("Warning: Failed to parse config.json - returning empty authorities");
                 vec![]
             }
         } else {
+            eprintln!("Warning: Failed to read config.json - returning empty authorities");
             vec![]
         }
     } else {
@@ -254,6 +256,16 @@ async fn init_blockchain(
         .data_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| state.data_dir.clone());
+
+    let admin_token = match req.admin_token {
+        Some(token) => token,
+        None => return Json(ApiResponse::err("admin_token required".to_string())),
+    };
+
+    if let Err(e) = api::validate_admin_token(&data_dir, &admin_token) {
+        return Json(ApiResponse::err(e.to_string()));
+    }
+
     let authorities = req.authorities.unwrap_or(1);
     let block_time = req.block_time.unwrap_or(5);
 
