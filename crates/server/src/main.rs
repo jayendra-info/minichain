@@ -222,7 +222,10 @@ async fn status(State(state): State<AppState>) -> Json<ApiResponse<ChainStatus>>
         if let Ok(contents) = std::fs::read_to_string(state.data_dir.join("config.json")) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
                 match json.get("authorities").and_then(|v| v.as_array()) {
-                    Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(arr) => arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect(),
                     None => {
                         eprintln!("Warning: 'authorities' key missing or invalid in config.json");
                         vec![]
