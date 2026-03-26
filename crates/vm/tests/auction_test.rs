@@ -192,12 +192,23 @@ fn test_init_sets_storage() {
     let bc = compile_auction();
     let seller = make_address(SELLER_ID);
 
-    let (result, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (result, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
 
     assert!(result.success, "init must HALT successfully");
     assert_eq!(st.get_u64(0), SELLER_ID, "slot 0 = seller");
     assert_eq!(st.get_u64(4), RESERVE_PRICE, "slot 4 = reserve_price");
-    assert_eq!(st.get_u64(3), INIT_TIMESTAMP + AUCTION_DURATION, "slot 3 = end_time");
+    assert_eq!(
+        st.get_u64(3),
+        INIT_TIMESTAMP + AUCTION_DURATION,
+        "slot 3 = end_time"
+    );
     assert_eq!(st.get_u64(6), MIN_INCREMENT, "slot 6 = min_increment");
     assert_eq!(st.get_u64(5), 0, "slot 5 = ended (false)");
     assert_eq!(result.logs, vec![SELLER_ID]);
@@ -211,7 +222,14 @@ fn test_first_bid_valid() {
     let seller = make_address(SELLER_ID);
     let bidder1 = make_address(BIDDER1_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (result, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid");
 
     assert!(result.success);
@@ -228,9 +246,23 @@ fn test_bid_below_reserve_reverts() {
     let seller = make_address(SELLER_ID);
     let bidder1 = make_address(BIDDER1_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
 
-    let (e, _) = run_err(&bc, st, bidder1, 50, INIT_TIMESTAMP + 10, "bid below reserve");
+    let (e, _) = run_err(
+        &bc,
+        st,
+        bidder1,
+        50,
+        INIT_TIMESTAMP + 10,
+        "bid below reserve",
+    );
     assert_eq!(e, VmError::Reverted);
 }
 
@@ -243,11 +275,25 @@ fn test_bid_below_min_increment_reverts() {
     let bidder1 = make_address(BIDDER1_ID);
     let bidder2 = make_address(BIDDER2_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid1");
 
     // +5 above 150, but min_increment=10 -> revert
-    let (e, _) = run_err(&bc, st, bidder2, 155, INIT_TIMESTAMP + 20, "bid below increment");
+    let (e, _) = run_err(
+        &bc,
+        st,
+        bidder2,
+        155,
+        INIT_TIMESTAMP + 20,
+        "bid below increment",
+    );
     assert_eq!(e, VmError::Reverted);
 }
 
@@ -260,14 +306,25 @@ fn test_outbid_credits_pending_returns() {
     let bidder1 = make_address(BIDDER1_ID);
     let bidder2 = make_address(BIDDER2_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid1");
     let (result, st) = run_ok(&bc, st, bidder2, 200, INIT_TIMESTAMP + 20, "bid2");
 
     assert!(result.success);
     assert_eq!(st.get_u64(1), 200, "highest_bid = 200");
     assert_eq!(st.get_u64(2), BIDDER2_ID, "highest_bidder = bidder2");
-    assert_eq!(st.get_u64(pending_key(BIDDER1_ID)), 150, "bidder1 pending = 150");
+    assert_eq!(
+        st.get_u64(pending_key(BIDDER1_ID)),
+        150,
+        "bidder1 pending = 150"
+    );
     assert_eq!(result.logs, vec![BIDDER1_ID, 200, BIDDER2_ID]);
 }
 
@@ -280,7 +337,14 @@ fn test_withdraw_by_outbid_bidder() {
     let bidder1 = make_address(BIDDER1_ID);
     let bidder2 = make_address(BIDDER2_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid1");
     let (_, st) = run_ok(&bc, st, bidder2, 200, INIT_TIMESTAMP + 20, "bid2");
     let (result, st) = run_ok(&bc, st, bidder1, 0, INIT_TIMESTAMP + 30, "withdraw");
@@ -298,7 +362,14 @@ fn test_withdraw_nothing_reverts() {
     let seller = make_address(SELLER_ID);
     let bidder1 = make_address(BIDDER1_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
 
     let (e, _) = run_err(&bc, st, bidder1, 0, INIT_TIMESTAMP + 10, "withdraw nothing");
     assert_eq!(e, VmError::Reverted);
@@ -313,7 +384,14 @@ fn test_double_withdraw_reverts() {
     let bidder1 = make_address(BIDDER1_ID);
     let bidder2 = make_address(BIDDER2_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid1");
     let (_, st) = run_ok(&bc, st, bidder2, 200, INIT_TIMESTAMP + 20, "bid2");
     let (_, st) = run_ok(&bc, st, bidder1, 0, INIT_TIMESTAMP + 30, "withdraw1");
@@ -331,7 +409,14 @@ fn test_auto_finalize_on_time_expiry() {
     let bidder1 = make_address(BIDDER1_ID);
     let end_time = INIT_TIMESTAMP + AUCTION_DURATION;
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid");
     assert_eq!(st.get_u64(5), 0, "ended == 0 before expiry");
 
@@ -352,7 +437,14 @@ fn test_bid_after_ended_reverts() {
     let bidder2 = make_address(BIDDER2_ID);
     let end_time = INIT_TIMESTAMP + AUCTION_DURATION;
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid");
     // Seller calls after end -> auto-finalize + seller_withdraw succeeds
     let (result, st) = run_ok(&bc, st, seller, 0, end_time + 1, "seller finalizes");
@@ -373,7 +465,14 @@ fn test_seller_withdraw_after_end() {
     let bidder1 = make_address(BIDDER1_ID);
     let end_time = INIT_TIMESTAMP + AUCTION_DURATION;
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 200, INIT_TIMESTAMP + 10, "bid");
     let (result, st) = run_ok(&bc, st, seller, 0, end_time + 10, "seller withdraw");
 
@@ -392,7 +491,14 @@ fn test_seller_double_withdraw_reverts() {
     let bidder1 = make_address(BIDDER1_ID);
     let end_time = INIT_TIMESTAMP + AUCTION_DURATION;
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 200, INIT_TIMESTAMP + 10, "bid");
     let (_, st) = run_ok(&bc, st, seller, 0, end_time + 10, "seller withdraw 1");
 
@@ -408,10 +514,24 @@ fn test_seller_withdraw_before_end_reverts() {
     let seller = make_address(SELLER_ID);
     let bidder1 = make_address(BIDDER1_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 200, INIT_TIMESTAMP + 10, "bid");
 
-    let (e, _) = run_err(&bc, st, seller, 0, INIT_TIMESTAMP + 100, "seller early withdraw");
+    let (e, _) = run_err(
+        &bc,
+        st,
+        seller,
+        0,
+        INIT_TIMESTAMP + 100,
+        "seller early withdraw",
+    );
     assert_eq!(e, VmError::Reverted);
 }
 
@@ -425,7 +545,14 @@ fn test_multiple_bids_accumulate_pending_returns() {
     let bidder2 = make_address(BIDDER2_ID);
     let bidder3 = make_address(BIDDER3_ID);
 
-    let (_, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (_, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     let (_, st) = run_ok(&bc, st, bidder1, 150, INIT_TIMESTAMP + 10, "bid1");
     let (_, st) = run_ok(&bc, st, bidder2, 200, INIT_TIMESTAMP + 20, "bid2");
     let (_, st) = run_ok(&bc, st, bidder3, 300, INIT_TIMESTAMP + 30, "bid3");
@@ -447,7 +574,14 @@ fn test_full_happy_path() {
     let end_time = INIT_TIMESTAMP + AUCTION_DURATION;
 
     // 1. Init
-    let (r, st) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (r, st) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     assert!(r.success);
 
     // 2. Bidder1 bids 150
@@ -478,7 +612,14 @@ fn test_gas_usage_is_bounded() {
     let bc = compile_auction();
     let seller = make_address(SELLER_ID);
 
-    let (result, _) = run_ok(&bc, TestStorage::default(), seller, 0, INIT_TIMESTAMP, "init");
+    let (result, _) = run_ok(
+        &bc,
+        TestStorage::default(),
+        seller,
+        0,
+        INIT_TIMESTAMP,
+        "init",
+    );
     assert!(result.gas_used > 0, "gas must be consumed");
     assert!(result.gas_used < 500_000, "init should use < 500k gas");
 }
