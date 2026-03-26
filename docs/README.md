@@ -58,6 +58,7 @@ The book covers:
 - **Part 4: Assembler** - Assembly language to bytecode compiler
 - **Part 5: Blockchain** - Consensus and chain management
 - **Part 6: CLI** - Command line interface and REPL
+- **Appendix: English Auction Contract** - End-to-end contract documentation for `contracts/auction.asm`
 
 ## Adding Content
 

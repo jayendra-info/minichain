@@ -280,6 +280,9 @@ The documentation covers the implementation in 6 comprehensive chapters:
 5. **Chapter 5: Consensus & Chain** - PoA consensus and blockchain orchestration
 6. **Chapter 6: CLI** - Command-line interface usage guide
 
+Additional appendix documentation includes:
+- **English Auction Smart Contract** - Full walkthrough of `contracts/auction.asm` with storage layout, dispatch logic, CLI usage, and integration tests.
+
 Each chapter includes:
 - Conceptual explanations with analogies
 - Implementation details and design decisions

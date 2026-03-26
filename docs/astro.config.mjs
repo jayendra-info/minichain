@@ -106,6 +106,7 @@ export default defineConfig({
 						{ label: 'A: Elliptic Curve Taxonomy', slug: 'appendix/elliptic-curves' },
 						{ label: 'B: Instruction Set Reference', slug: 'appendix/instruction-set' },
 						{ label: 'C: Advanced Blockchain Concepts', slug: 'appendix/advanced-blockchain' },
+						{ label: 'D: English Auction Contract', slug: 'appendix/auction-contract' },
 					],
 				},
 			],

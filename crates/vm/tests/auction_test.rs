@@ -21,7 +21,9 @@
 //!   16. Gas consumption is bounded
 
 use minichain_assembler::assemble;
+use minichain_chain::Mempool;
 use minichain_core::Address;
+use minichain_core::Transaction;
 use minichain_vm::{ExecutionResult, StorageBackend, Vm, VmError};
 use std::collections::HashMap;
 
@@ -113,24 +115,55 @@ fn run_auction(
     timestamp: u64,
 ) -> Result<(ExecutionResult, TestStorage), (VmError, TestStorage)> {
     let contract_addr = make_address(0xC0C0);
-    let mut vm = Vm::new_with_context(
-        bytecode.to_vec(),
-        5_000_000,
+
+    let mut mempool = Mempool::new_in_memory();
+    let tx = Transaction::call(
         caller,
         contract_addr,
+        timestamp.to_le_bytes().to_vec(),
         call_value,
+        0,
+        5_000_000,
         1,
-        timestamp,
+    );
+    mempool.add(tx).expect("failed to enqueue tx in mempool");
+
+    let pending_tx = mempool
+        .get_pending(1)
+        .into_iter()
+        .next()
+        .expect("mempool should return pending tx");
+    let pending_hash = pending_tx.hash();
+
+    let tx_timestamp = pending_tx
+        .data
+        .get(..8)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u64::from_le_bytes)
+        .unwrap_or(timestamp);
+
+    let mut vm = Vm::new_with_context(
+        bytecode.to_vec(),
+        pending_tx.gas_limit,
+        pending_tx.from,
+        contract_addr,
+        pending_tx.value,
+        pending_tx.gas_price,
+        tx_timestamp,
     );
 
     let storage_cell = std::cell::RefCell::new(storage);
     let wrapper = RefCellStorage(std::ptr::addr_of!(storage_cell));
     vm.set_storage(Box::new(wrapper));
 
-    match vm.run() {
+    let run_result = match vm.run() {
         Ok(result) => Ok((result, storage_cell.into_inner())),
         Err(e) => Err((e, storage_cell.into_inner())),
-    }
+    };
+
+    let _ = mempool.remove(&pending_hash);
+
+    run_result
 }
 
 /// Unwrap a successful run or panic with a descriptive message.

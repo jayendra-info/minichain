@@ -13,3 +13,4 @@ serde.workspace = true
 
 [dev-dependencies]
 minichain-assembler.workspace = true
+minichain-chain.workspace = true
