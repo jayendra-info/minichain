@@ -1,390 +1,247 @@
 # ERC20 Token Contract for Minichain
 
-A complete, production-ready ERC20 token implementation written in minichain assembly language.
+A working ERC20-style token contract for minichain assembly, including:
+
+- real VM-backed execution during block production
+- read-only queries via `minichain call --query`
+- deploy-time initialization for owner, metadata, and initial supply
+- Bun end-to-end tests under [`contracts/erc20/test`](/home/pavitra/Projects/minichain/contracts/erc20/test)
+
+## What This Contract Supports
+
+The contract exposes these selectors:
+
+| Function | Selector |
+| --- | --- |
+| `totalSupply()` | `0x00` |
+| `balanceOf(addressId)` | `0x01` |
+| `transfer(to, amount)` | `0x02` |
+| `approve(spender, amount)` | `0x03` |
+| `transferFrom(from, to, amount)` | `0x04` |
+| `allowance(owner, spender)` | `0x05` |
+| `mint(to, amount)` | `0x06` |
+| `burn(amount)` | `0x07` |
+| `name()` | `0x08` |
+| `symbol()` | `0x09` |
+| `decimals()` | `0x0A` |
+| `init(owner, name, symbol, decimals, initialTo, initialSupply)` | `0xFF` |
+
+Notes:
+
+- `mint` is owner-only.
+- `burn` destroys the caller's tokens.
+- `name` and `symbol` are stored as up to 8 ASCII characters packed into a `u64`.
+- Account arguments are not full 20-byte addresses. The contract uses the same `u64` view the VM exposes from the first 8 bytes of the minichain address in little-endian form.
 
 ## Quick Start
 
-### 1. Initialize Blockchain
+### 1. Initialize a chain and create accounts
 
 ```bash
-cd /path/to/minichain
 cargo run --release -- init --authorities 1
-```
 
-### 2. Mint Tokens to Accounts
-
-```bash
-cargo run --release -- account mint --from authority_0 --to <ALICE_ADDR> --amount 1000000
-```
-
-### 3. Create Test Accounts
-
-```bash
 cargo run --release -- account new --name alice
 cargo run --release -- account new --name bob
 cargo run --release -- account new --name charlie
 ```
 
-### 4. Deploy Contract
+### 2. Fund the accounts with native MIC
+
+The CLI now requires signer aliases with `@`.
 
 ```bash
-cargo run --release -- deploy --from alice --source contracts/erc20/src/erc20.asm
+cargo run --release -- account mint --from @authority_0 --to <ALICE_ADDR> --amount 1000000
+cargo run --release -- account mint --from @authority_0 --to <BOB_ADDR> --amount 500000
+cargo run --release -- account mint --from @authority_0 --to <CHARLIE_ADDR> --amount 500000
 ```
 
-This will output the contract address. Note it for later use:
-```
-Contract deployed to: 0x1234567890abcdef...
+### 3. Convert addresses to contract `u64` ids
+
+The ERC20 contract expects the first 8 address bytes interpreted as a little-endian `u64`.
+
+Example in Bun:
+
+```ts
+function addressToId(address: string): bigint {
+  const bytes = Buffer.from(address.replace(/^0x/i, ""), "hex");
+  return bytes.readBigUInt64LE(0);
+}
 ```
 
-### 5. Produce First Block
+### 4. Deploy with metadata and owner setup
+
+Deployment accepts init calldata through `--init-data`. The payload is regular call encoding for selector `0xFF`.
+
+```bash
+cargo run --release -- deploy \
+  --from @alice \
+  --source contracts/erc20/src/erc20.asm \
+  --init-data <HEX_INIT_CALLDATA> \
+  --gas-limit 400000
+```
+
+Then produce a block:
 
 ```bash
 cargo run --release -- block produce --authority authority_0
 ```
 
-## Usage Examples
+The deploy command prints:
 
-All function calls follow this pattern:
+```text
+Contract Address: 0x...
+```
+
+## CLI Usage
+
+### Read-only calls
+
+Use `--query` for getters. Query mode executes immediately and prints a stable result line:
 
 ```bash
-cargo run --release -- call --from <ACCOUNT> --to <CONTRACT_ADDR> --data <FUNCTION_ID>:<PARAMS>
+cargo run --release -- call \
+  --query \
+  --from @alice \
+  --to 0x... \
+  --data <HEX_CALLDATA>
+```
+
+Output includes:
+
+```text
+Result: 0x...
+```
+
+### State-changing calls
+
+State-changing calls are still transactions. Submit the call, then produce a block:
+
+```bash
+cargo run --release -- call \
+  --from @alice \
+  --to 0x... \
+  --data <HEX_CALLDATA> \
+  --gas-limit 250000
+
 cargo run --release -- block produce --authority authority_0
 ```
 
-### totalSupply()
+## Calldata Encoding
 
-Get the total number of tokens in circulation:
+Calldata is packed as:
 
-```bash
-cargo run --release -- call --from alice --to 0x... --data "00"
+```text
+[selector:u64 little-endian][arg1:u64 little-endian][arg2:u64 little-endian]...
 ```
 
-Returns: Total supply in memory[0]
+That means selector `0x08` must be passed as:
 
-### balanceOf(address)
-
-Check the balance of an address:
-
-```bash
-# Alice checks her balance
-cargo run --release -- call --from alice --to 0x... --data "01:1234567890abcdef"
+```text
+0800000000000000
 ```
 
-Where `1234567890abcdef` is the address to check (in hex, 16 characters).
+Amount `1000` must be passed as:
 
-Returns: Balance in memory[0]
+```text
+e803000000000000
+```
 
-### transfer(to, amount)
+### Example helper
 
-Transfer tokens from caller to another address:
+```ts
+function encodeWord(value: number | bigint): string {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setBigUint64(0, BigInt(value), true);
+  return Buffer.from(buffer).toString("hex");
+}
+
+function encodeCall(selector: number, args: readonly (number | bigint)[]): string {
+  return [encodeWord(selector), ...args.map(encodeWord)].join("");
+}
+```
+
+## Example Calls
+
+Assume:
+
+- `TOKEN_ADDR=0x...`
+- `ALICE_ID`, `BOB_ID`, and `CHARLIE_ID` are the `u64` address ids derived from their real addresses
+
+### Query metadata
 
 ```bash
-# Alice transfers 100 tokens to Bob
-cargo run --release -- call --from alice --to 0x... --data "02:bob_addr:00000000000000064"
+cargo run --release -- call --query --from @alice --to $TOKEN_ADDR --data 0800000000000000
+cargo run --release -- call --query --from @alice --to $TOKEN_ADDR --data 0900000000000000
+cargo run --release -- call --query --from @alice --to $TOKEN_ADDR --data 0a00000000000000
+```
+
+### Mint tokens to Alice
+
+```bash
+cargo run --release -- call \
+  --from @alice \
+  --to $TOKEN_ADDR \
+  --data <selector 0x06 + ALICE_ID + 1000> \
+  --gas-limit 250000
+
 cargo run --release -- block produce --authority authority_0
 ```
 
-Parameters:
-- Function ID: `02`
-- `bob_addr`: Recipient address (16 hex chars)
-- `00000000000000064`: Amount (100 in decimal)
-
-Returns: 1 on success, reverts on failure
-
-### approve(spender, amount)
-
-Allow someone to spend tokens on your behalf:
+### Check balances
 
 ```bash
-# Alice allows Bob to spend 50 of her tokens
-cargo run --release -- call --from alice --to 0x... --data "03:bob_addr:00000000000000032"
+cargo run --release -- call \
+  --query \
+  --from @alice \
+  --to $TOKEN_ADDR \
+  --data <selector 0x01 + ALICE_ID>
+```
+
+### Approve and transferFrom
+
+```bash
+# Alice approves Bob for 200
+cargo run --release -- call --from @alice --to $TOKEN_ADDR --data <selector 0x03 + BOB_ID + 200> --gas-limit 250000
+cargo run --release -- block produce --authority authority_0
+
+# Bob transfers 150 from Alice to Charlie
+cargo run --release -- call --from @bob --to $TOKEN_ADDR --data <selector 0x04 + ALICE_ID + CHARLIE_ID + 150> --gas-limit 250000
 cargo run --release -- block produce --authority authority_0
 ```
 
-### transferFrom(from, to, amount)
-
-Transfer tokens using an allowance (delegate transfer):
+### Burn tokens
 
 ```bash
-# Bob transfers 30 of Alice's tokens to Charlie
-# (Bob must have approval from Alice)
-cargo run --release -- call --from bob --to 0x... --data "04:alice_addr:charlie_addr:0000000000000001e"
-cargo run --release -- block produce --authority authority_0
-```
-
-### allowance(owner, spender)
-
-Check how much a spender is allowed to spend:
-
-```bash
-cargo run --release -- call --from bob --to 0x... --data "05:alice_addr:bob_addr"
-```
-
-### mint(to, amount)
-
-Create new tokens (owner-only):
-
-```bash
-# Alice (owner) mints 1000 tokens to herself
-cargo run --release -- call --from alice --to 0x... --data "06:alice_addr:00000000000003e8"
-cargo run --release -- block produce --authority authority_0
-```
-
-### burn(amount)
-
-Destroy tokens (must be caller's tokens):
-
-```bash
-# Alice burns 100 of her tokens
-cargo run --release -- call --from alice --to 0x... --data "07:00000000000000064"
-cargo run --release -- block produce --authority authority_0
-```
-
-### name()
-
-Get the token name (returns name encoded as u64, limited to 8 chars):
-
-```bash
-cargo run --release -- call --from alice --to 0x... --data "08"
-```
-
-Returns: Token name in memory[0] (encoded as little-endian u64)
-
-### symbol()
-
-Get the token symbol (returns symbol encoded as u64, limited to 8 chars):
-
-```bash
-cargo run --release -- call --from alice --to 0x... --data "09"
-```
-
-Returns: Token symbol in memory[0] (encoded as little-endian u64)
-
-### decimals()
-
-Get the number of decimal places:
-
-```bash
-cargo run --release -- call --from alice --to 0x... --data "0a"
-```
-
-Returns: Decimals value in memory[0] (typically 18)
-
-## Calldata Format
-
-Each function call requires calldata in hex format. The format is:
-
-```
-[2-char function ID] : [16-char hex address] : [16-char hex amount]
-```
-
-### Function IDs
-
-| Function | ID | Args |
-|----------|----|----|
-| totalSupply | 00 | - |
-| balanceOf | 01 | address |
-| transfer | 02 | to, amount |
-| approve | 03 | spender, amount |
-| transferFrom | 04 | from, to, amount |
-| allowance | 05 | owner, spender |
-| mint | 06 | to, amount |
-| burn | 07 | amount |
-| name | 08 | - |
-| symbol | 09 | - |
-| decimals | 0A | - |
-
-### Address Format
-
-Addresses are 20 bytes (ethereum-style) but must be converted to u64 for minichain.
-
-Example: If address is `0x1234`, use `0000000000001234`
-
-### Amount Format
-
-Amounts are u64 (8 bytes, 16 hex characters).
-
-Examples:
-- 1 token: `0000000000000001`
-- 100 tokens: `0000000000000064`
-- 1000 tokens: `00000000000003e8`
-- 1 million tokens: `00000000000f4240`
-
-## Complete Workflow Example
-
-```bash
-# 1. Initialize
-cargo run --release -- init --authorities 1
-
-# 2. Create accounts
-cargo run --release -- account new --name alice
-cargo run --release -- account new --name bob
-cargo run --release -- account new --name charlie
-
-# 3. Deploy contract
-cargo run --release -- deploy --from alice --source contracts/erc20/src/erc20.asm
-# Note: Contract address is 0x... (replace with actual)
-
-TOKEN_ADDR="0x..."
-
-# 4. Produce block
-cargo run --release -- block produce --authority authority_0
-
-# 5. Mint initial supply to Alice (1000 tokens)
-cargo run --release -- call --from alice --to $TOKEN_ADDR --data "06:0000000000000001:00000000000003e8"
-cargo run --release -- block produce --authority authority_0
-
-# 6. Check Alice's balance
-cargo run --release -- call --from alice --to $TOKEN_ADDR --data "01:0000000000000001"
-
-# 7. Transfer 100 to Bob
-cargo run --release -- call --from alice --to $TOKEN_ADDR --data "02:0000000000000002:0000000000000064"
-cargo run --release -- block produce --authority authority_0
-
-# 8. Check Bob's balance
-cargo run --release -- call --from bob --to $TOKEN_ADDR --data "01:0000000000000002"
-
-# 9. Approve Bob to spend 50 tokens
-cargo run --release -- call --from alice --to $TOKEN_ADDR --data "03:0000000000000002:0000000000000032"
-cargo run --release -- block produce --authority authority_0
-
-# 10. Bob transfers 30 tokens from Alice to Charlie
-cargo run --release -- call --from bob --to $TOKEN_ADDR --data "04:0000000000000001:0000000000000003:000000000000001e"
-cargo run --release -- block produce --authority authority_0
-
-# 11. Verify Charlie received tokens
-cargo run --release -- call --from charlie --to $TOKEN_ADDR --data "01:0000000000000003"
-
-# 12. Alice burns 50 tokens
-cargo run --release -- call --from alice --to $TOKEN_ADDR --data "07:0000000000000032"
+cargo run --release -- call --from @alice --to $TOKEN_ADDR --data <selector 0x07 + 100> --gas-limit 250000
 cargo run --release -- block produce --authority authority_0
 ```
 
 ## Testing
 
-End-to-end tests are written in TypeScript and run with [Bun](https://bun.sh).
-
-### Prerequisites
-
-- Bun ≥ 1.0
-- A release build of `minichain` (`cargo build --release` from the repo root)
-
-### Run the tests
+The contract is exercised by the Bun E2E suite:
 
 ```bash
+cargo build --release -p minichain-cli
 cd contracts/erc20
 bun test
 ```
 
-The test suite spins up a temporary chain, deploys the contract, and verifies the full ERC20 lifecycle: mint, transfer, approve, transferFrom, and burn.
+The test flow covers:
 
-### Test layout
+- deploy with metadata initialization
+- owner mint success
+- non-owner mint failure
+- transfer
+- self-transfer
+- approval and allowance tracking
+- `transferFrom`
+- burn
+- final supply and balance checks
 
-```
-contracts/erc20/
-├── src/
-│   └── erc20.asm          # Contract source
-└── test/
-    ├── e2e.test.ts         # End-to-end test cases (Bun test runner)
-    ├── contract-client.ts  # Typed ABI + Contract class
-    └── test-utils.ts       # Chain helpers (init, accounts, blocks)
-```
+## Files
 
-#### `contract-client.ts`
-
-Instead of one function per contract method, the client exposes a typed `ERC20_ABI` object and a generic `Contract` class:
-
-```typescript
-const erc20   = new Contract(dataDir, contractAddress, ERC20_ABI);
-const asAlice = erc20.connect("alice");
-const asBob   = erc20.connect("bob");
-
-// Return type inferred from the ABI: Promise<number>
-const balance = await asAlice.call("balanceOf", { address: 1 });
-
-// Return type inferred as Promise<void>
-await asAlice.call("transfer", { to: 2, amount: 300 });
-await asBob.call("transferFrom", { from: 1, to: 3, amount: 150 });
-```
-
-Argument shapes and return types are fully derived from `ERC20_ABI` at compile time — passing wrong arguments or unknown function names is a TypeScript error.
-
-## Implementation Details
-
-See [ERC20_DESIGN.md](./ERC20_DESIGN.md) for:
-- Storage layout and hashing strategy
-- Detailed function specifications
-- Security analysis
-- Gas considerations
-- Future enhancement ideas
-
-## Limitations
-
-1. **XOR Hashing**: Uses simplified XOR instead of Blake3 for storage keys
-2. **No Events**: Minichain doesn't support events; rely on transaction history
-3. **Limited Metadata**: Name and symbol limited to 8 ASCII characters (encoded as u64)
-4. **Fixed Precision**: 64-bit unsigned integers (no flexible decimals configuration)
-5. **Single Owner**: Mint/burn restricted to contract owner
-6. **Little Endian**: All numbers are stored in little-endian format
-
-## Comparison to Standard ERC20
-
-| Feature | This Implementation | Standard ERC20 |
-|---------|-------------------|-----------------|
-| transfer | ✓ | ✓ |
-| approve | ✓ | ✓ |
-| transferFrom | ✓ | ✓ |
-| allowance | ✓ | ✓ |
-| balanceOf | ✓ | ✓ |
-| totalSupply | ✓ | ✓ |
-| name() | ✓ | ✓ |
-| symbol() | ✓ | ✓ |
-| decimals() | ✓ | ✓ |
-| mint | ✓ | ✗ (often added) |
-| burn | ✓ | ✗ (often added) |
-| Events | - | ✓ |
-
-## Security Considerations
-
-✅ **What's Protected:**
-- Balance integrity maintained across transfers
-- Allowance properly enforced
-- Owner-only functions properly guarded
-- No reentrancy possible (no external calls)
-
-⚠️ **What to Watch:**
-- Address reuse could cause collisions (use proper hashing in production)
-- No input validation on zero addresses
-- Simple XOR hashing is not cryptographically secure
-- Total supply could theoretically overflow (u64 limit ~18 billion)
-
-## Future Enhancements
-
-1. ✓ Implement metadata functions (name, symbol, decimals)
-2. Implement event simulation via special storage slots
-3. Add pause/unpause mechanism
-4. Implement address blacklist
-5. Add snapshot functionality for historical balances
-6. Implement rebase/fee mechanisms
-7. Add minter/burner role management
-8. Implement permit() for gasless approvals
-
-## Contributing
-
-To extend this contract:
-
-1. Edit `src/erc20.asm` to add the new function (dispatcher entry + implementation)
-2. Add the function to `ERC20_ABI` in `test/contract-client.ts`
-3. Add test cases in `test/e2e.test.ts`
-4. Update [ERC20_DESIGN.md](./ERC20_DESIGN.md)
-5. Add test cases to `test_erc20.sh`
-
-## License
-
-Same as minichain project
-
-## References
-
-- [ERC20 Specification](https://eips.ethereum.org/EIPS/eip-20)
-- [OpenZeppelin ERC20](https://github.com/OpenZeppelin/openzeppelin-contracts)
-- [Minichain Documentation](../../README.md)
+- [`src/erc20.asm`](/home/pavitra/Projects/minichain/contracts/erc20/src/erc20.asm): contract implementation
+- [`test/contract-client.ts`](/home/pavitra/Projects/minichain/contracts/erc20/test/contract-client.ts): Bun-side encoding and deployment helpers
+- [`test/e2e.test.ts`](/home/pavitra/Projects/minichain/contracts/erc20/test/e2e.test.ts): end-to-end contract tests
+- [`ERC20_DESIGN.md`](/home/pavitra/Projects/minichain/contracts/erc20/ERC20_DESIGN.md): storage layout and design notes

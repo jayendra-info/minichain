@@ -2,323 +2,291 @@
 
 ## Overview
 
-This is a complete ERC20 token implementation for minichain written in assembly. It supports the full standard ERC20 interface plus mint/burn functionality and metadata (name, symbol, decimals).
+This contract is a VM-executed ERC20-style token for minichain assembly. It now runs against the real contract execution path in the chain runtime:
+
+- deployment stores runtime bytecode by `code_hash`
+- optional init calldata runs during deployment
+- state-changing calls execute during block production
+- read-only calls execute synchronously through `minichain call --query`
+
+The implementation keeps the ERC20 surface small and educational while matching the actual minichain runtime behavior.
+
+## Runtime Model
+
+### Deployment path
+
+Deployment transactions no longer contain only raw bytecode. The chain executor expects deployment data encoded as:
+
+```text
+[runtime_len: u32 little-endian][runtime_code][init_data]
+```
+
+At execution time:
+
+1. the runtime bytecode is stored by `code_hash`
+2. optional `init` calldata is executed against contract storage
+3. the contract account is persisted only if init succeeds
+
+This logic lives in [`crates/chain/src/executor.rs`](/home/pavitra/Projects/minichain/crates/chain/src/executor.rs).
+
+### Call path
+
+State-changing calls:
+
+1. are submitted as transactions
+2. enter the mempool
+3. execute during block production
+4. commit `SSTORE` writes only on success
+
+Read-only calls:
+
+1. use `minichain call --query`
+2. run immediately against current state
+3. do not change nonce or storage
+4. return `Result: 0x...`
+
+### Address model
+
+The VM exposes `CALLER` and `ADDRESS` as `u64` values derived from the first 8 bytes of the 20-byte minichain address in little-endian order.
+
+The ERC20 contract therefore uses `u64` account ids, not full 20-byte addresses, for:
+
+- balances
+- allowances
+- owner identity
+- transfer targets
+
+## Contract Interface
+
+### Public selectors
+
+| Function | Selector | Args |
+| --- | --- | --- |
+| `totalSupply()` | `0x00` | none |
+| `balanceOf(addressId)` | `0x01` | `addressId` |
+| `transfer(to, amount)` | `0x02` | `to`, `amount` |
+| `approve(spender, amount)` | `0x03` | `spender`, `amount` |
+| `transferFrom(from, to, amount)` | `0x04` | `from`, `to`, `amount` |
+| `allowance(owner, spender)` | `0x05` | `owner`, `spender` |
+| `mint(to, amount)` | `0x06` | `to`, `amount` |
+| `burn(amount)` | `0x07` | `amount` |
+| `name()` | `0x08` | none |
+| `symbol()` | `0x09` | none |
+| `decimals()` | `0x0A` | none |
+| `init(owner, name, symbol, decimals, initialTo, initialSupply)` | `0xFF` | 6 args |
+
+### Behavioral notes
+
+- `mint` is owner-only.
+- `burn` burns the caller's own balance.
+- `transferFrom` consumes allowance.
+- `name` and `symbol` return packed ASCII `u64` values, up to 8 characters.
+- Reverts are surfaced by the VM and storage writes are discarded.
 
 ## Storage Architecture
 
-### Layout
+### Fixed slots
 
-```
-Slot 0 (TOTAL_SUPPLY_SLOT):
-  64-bit unsigned integer representing total tokens in circulation
-
-Slot 1 (OWNER_SLOT):
-  64-bit address of the contract owner (can mint/burn)
-
-Slot 2 (NAME_SLOT):
-  64-bit value encoding token name (max 8 ASCII characters, little-endian)
-  Example: "MyToken\0" encoded as u64
-
-Slot 3 (SYMBOL_SLOT):
-  64-bit value encoding token symbol (max 8 ASCII characters, little-endian)
-  Example: "TKN\0\0\0\0\0" = 0x004E4B54 (little-endian)
-
-Slot 4 (DECIMALS_SLOT):
-  64-bit unsigned integer representing decimal places (e.g., 18 for Ethereum compatibility)
-
-Dynamic Slots (Balances):
-  Key = hash(address XOR BALANCE_SLOT_ID)
-  Value = 64-bit balance for that address
-  
-Dynamic Slots (Allowances):
-  Key = hash(owner_address XOR (spender_address XOR ALLOWANCE_SLOT_ID))
-  Value = 64-bit allowance amount
+```text
+Slot 0: total supply
+Slot 1: owner id
+Slot 2: name (packed ASCII u64)
+Slot 3: symbol (packed ASCII u64)
+Slot 4: decimals
 ```
 
-### Hashing Strategy
+### Dynamic slots
 
-For mapping-like storage, we use XOR-based hashing (simplified):
+The current contract uses XOR-derived keys, not cryptographic hashing.
 
+```text
+BALANCE_MASK   = 0x1000000000000000
+ALLOWANCE_MASK = 0x2000000000000000
+
+balance_key(address)        = address XOR BALANCE_MASK
+allowance_key(owner, spender) = owner XOR spender XOR ALLOWANCE_MASK
 ```
-balance_key = address XOR 0  (BALANCE_SLOT_ID)
-allowance_key = owner_address XOR (spender_address XOR 1)
-```
 
-This is a **simplified approach** for educational purposes. A real implementation would use cryptographic hashing with Blake3.
+This matches the actual assembly in [`src/erc20.asm`](/home/pavitra/Projects/minichain/contracts/erc20/src/erc20.asm).
 
-## Function Specifications
+### Tradeoff
 
-### 1. totalSupply()
-**Function ID:** 0x00  
-**Arguments:** None  
-**Returns:** u64 (total supply)  
-**Constraints:** None  
-**Logic:**
-- Load value from TOTAL_SUPPLY_SLOT
-- Return to caller
+This is intentionally lightweight for minichain’s educational VM:
 
-### 2. balanceOf(address)
-**Function ID:** 0x01  
-**Arguments:** address (u64 at calldata offset 8)  
-**Returns:** u64 (balance of address)  
-**Constraints:** None  
-**Logic:**
-- Compute storage key = hash(address, BALANCE_SLOT_ID)
-- Load from storage
-- Return value (0 if not found)
+- simple and cheap to compute
+- easy to inspect in assembly
+- not collision-resistant like real map hashing
 
-### 3. transfer(to, amount)
-**Function ID:** 0x02  
-**Arguments:** to (8B@offset 8), amount (8B@offset 16)  
-**Returns:** bool (success/failure)  
-**Constraints:**
-- amount > 0
-- msg.sender balance >= amount
-
-**Logic:**
-- Verify conditions
-- Deduct from sender balance
-- Add to recipient balance
-- Return true
-
-### 4. approve(spender, amount)
-**Function ID:** 0x03  
-**Arguments:** spender (8B@8), amount (8B@16)  
-**Returns:** bool (success)  
-**Constraints:**
-- amount >= 0
-
-**Logic:**
-- Set allowance[msg.sender][spender] = amount
-- Return true
-
-### 5. transferFrom(from, to, amount)
-**Function ID:** 0x04  
-**Arguments:** from (8B@8), to (8B@16), amount (8B@24)  
-**Returns:** bool (success)  
-**Constraints:**
-- amount > 0
-- allowance[from][msg.sender] >= amount
-- from balance >= amount
-
-**Logic:**
-- Verify conditions
-- Decrease allowance[from][msg.sender]
-- Deduct from balance
-- Add to recipient balance
-- Return true
-
-### 6. allowance(owner, spender)
-**Function ID:** 0x05  
-**Arguments:** owner (8B@8), spender (8B@16)  
-**Returns:** u64 (allowed amount)  
-**Logic:**
-- Load allowance[owner][spender]
-- Return value (0 if not set)
-
-### 7. mint(to, amount)
-**Function ID:** 0x06  
-**Arguments:** to (8B@8), amount (8B@16)  
-**Returns:** bool (success)  
-**Constraints:**
-- msg.sender == owner
-- amount > 0
-
-**Logic:**
-- Verify caller is owner
-- Increase total_supply
-- Add to recipient balance
-- Return true
-
-### 8. burn(amount)
-**Function ID:** 0x07  
-**Arguments:** amount (8B@8)  
-**Returns:** bool (success)  
-**Constraints:**
-- amount > 0
-- msg.sender balance >= amount
-
-**Logic:**
-- Verify conditions
-- Decrease balance
-- Decrease total_supply
-- Return true
-
-### 9. name()
-**Function ID:** 0x08  
-**Arguments:** None  
-**Returns:** u64 (token name encoded as little-endian ASCII)  
-**Constraints:** None  
-**Logic:**
-- Load name from NAME_SLOT (slot 2)
-- Return to caller
-
-### 10. symbol()
-**Function ID:** 0x09  
-**Arguments:** None  
-**Returns:** u64 (token symbol encoded as little-endian ASCII)  
-**Constraints:** None  
-**Logic:**
-- Load symbol from SYMBOL_SLOT (slot 3)
-- Return to caller (max 8 ASCII characters)
-
-### 11. decimals()
-**Function ID:** 0x0A  
-**Arguments:** None  
-**Returns:** u64 (number of decimal places)  
-**Constraints:** None  
-**Logic:**
-- Load decimals from DECIMALS_SLOT (slot 4)
-- Return to caller (typically 18 for ERC20 compatibility)
+For production-grade behavior, the key-derivation strategy would need stronger hashing support in the VM or precompiles.
 
 ## Calldata Format
 
-Functions accept calldata in the following format:
+Every call uses packed little-endian `u64` words:
 
-```
-Byte 0-7:    Function ID (0-7)
-Byte 8-15:   First parameter (address/amount)
-Byte 16-23:  Second parameter (if applicable)
-Byte 24-31:  Third parameter (if applicable)
+```text
+[selector:u64 LE][arg1:u64 LE][arg2:u64 LE]...
 ```
 
-### Example: transfer(0x123, 1000)
+Examples:
 
+```text
+name()               => 0800000000000000
+decimals()           => 0a00000000000000
+mint(to, 1000)       => 0600000000000000[to][e803000000000000]
+burn(100)            => 07000000000000006400000000000000
 ```
-Calldata (hex): 02 00 00 00 00 00 00 00  | 23 01 00 00 00 00 00 00  | e8 03 00 00 00 00 00 00
-                Function ID: 2           | to = 0x123             | amount = 1000
+
+The `init` selector uses the same format:
+
+```text
+ff00000000000000
+[owner]
+[name]
+[symbol]
+[decimals]
+[initialTo]
+[initialSupply]
 ```
 
-## Memory Layout
+## Function Logic
 
-The contract uses memory for temporary storage:
-- Offset 0-7: Return value (output)
-- Offset 8+: Scratch space for computations
+### totalSupply
 
-## Gas Considerations
+- reads slot `0`
+- writes the result to memory offset `0`
+- halts
 
-- SLOAD: 100 gas (expensive, use sparingly)
-- SSTORE: 5000 gas (very expensive)
-- Arithmetic: 2-5 gas
-- Comparisons: 2 gas
+### balanceOf
 
-**Optimization Tips:**
-- Cache frequently accessed values in registers
-- Batch storage operations when possible
-- Use XOR for key derivation (faster than hashing)
+- loads `addressId`
+- computes `addressId XOR BALANCE_MASK`
+- reads the slot with `SLOAD`
+- returns the stored balance
 
-## Security Analysis
+### transfer
 
-### Known Limitations
+- uses `CALLER` as the sender id
+- requires `amount > 0`
+- requires sender balance `>= amount`
+- debits sender and credits recipient
 
-1. **Simplified Hashing:** Uses XOR instead of Blake3 for key derivation
-   - Acceptable for educational purposes
-   - In production, implement proper cryptographic hashing
+### approve
 
-2. **No Event Emission:** Minichain doesn't have native event logging
-   - Could simulate via storage (inefficient)
-   - Better: rely on transaction history for audit
+- uses `CALLER` as the owner id
+- stores allowance at `owner XOR spender XOR ALLOWANCE_MASK`
 
-3. **No SafeERC20:** Implementation doesn't include return value checks
-   - Minichain REVERT on errors is sufficient
+### transferFrom
 
-4. **Fixed 64-bit Precision:** Uses u64 integers directly
-   - Decimals metadata defines UI representation (not actual precision)
-   - Practical limit: ~18 quintillion tokens max
+- uses `CALLER` as the spender id
+- checks allowance and source balance
+- decreases allowance
+- moves tokens from `from` to `to`
 
-### Security Patterns Applied
+### mint
 
-✅ Check-Effects-Interactions (CEI) ordering  
-✅ Revert on invalid state transitions  
-✅ No external calls (single-contract)  
-✅ Proper access control (owner-only operations)
+- checks `CALLER == owner`
+- requires `amount > 0`
+- increases total supply
+- credits recipient balance
 
-## Implementation Statistics
+### burn
 
-- **Total Lines:** ~417 assembly instructions
-- **Functions:** 11 core (6 standard ERC20 + 2 extended + 3 metadata) + dispatcher
-- **Storage Slots:** 5 fixed + N dynamic
-- **Bytecode Size:** ~897+ bytes (compiled)
-- **Time to Deploy:** <1 second
-- **Gas per Transfer:** ~5100 gas (estimate)
-- **Compiler:** minichain assembler (2-pass label resolution)
+- requires `amount > 0`
+- requires caller balance `>= amount`
+- debits caller balance
+- reduces total supply
+
+### init
+
+The contract is initialized through deployment-time calldata instead of hard-coded metadata.
+
+The init routine:
+
+1. rejects repeated initialization if owner slot is already set
+2. stores owner, name, symbol, and decimals
+3. optionally sets initial supply and initial recipient balance if `initialSupply > 0`
+
+## Query and Return Data
+
+The current VM returns up to the first 8 bytes from memory starting at offset `0`.
+
+This contract is designed around that constraint:
+
+- getters write a single `u64` to memory offset `0`
+- callers decode that as either:
+  - integer (`totalSupply`, `balanceOf`, `allowance`, `decimals`)
+  - ASCII-packed `u64` (`name`, `symbol`)
+
+This is why all public getters currently return one word.
+
+## Error Handling
+
+The contract uses `REVERT` labels for invalid state transitions:
+
+- zero-value transfers, mints, or burns
+- insufficient balances
+- insufficient allowance
+- non-owner mint attempts
+- repeated initialization
+- unknown selectors
+
+At the runtime level:
+
+- storage writes are buffered in an overlay
+- reverts discard the buffered writes
+- query mode never commits writes
+
+## Gas and Execution Notes
+
+Important current runtime details:
+
+- deploy base gas is `32_000 + 200 * bytecode_len`
+- call transactions charge native MIC for max gas before execution
+- unused gas is refunded after execution
+- failed calls do not transfer call value
+
+The contract itself keeps execution simple:
+
+- no loops
+- no external calls
+- no logs/events
+- one-word return values
 
 ## Testing Strategy
 
-### Unit Tests (Rust)
+The Bun E2E suite under [`test/e2e.test.ts`](/home/pavitra/Projects/minichain/contracts/erc20/test/e2e.test.ts) validates:
 
-1. Initialization & state
-2. Balance operations
-3. Allowance management
-4. Mint/burn authorization
-5. Edge cases (overflow, underflow)
+- deploy with metadata initialization
+- metadata getters
+- zero initial balances
+- owner mint success
+- non-owner mint failure
+- transfer
+- self-transfer
+- approve and allowance tracking
+- `transferFrom`
+- burn and supply reduction
+- final balances after chained operations
 
-### Integration Tests (CLI)
+Rust-side tests in the chain executor cover the runtime support this contract depends on:
 
-1. Happy path workflows
-2. Access control violations
-3. Insufficient funds
-4. Multi-party scenarios
+- deployment payload encode/decode
+- bytecode persistence
+- storage-changing contract execution
+- query mode not committing storage
 
-### Scenarios to Test
+## Limitations
 
-- Single transfer
-- Multiple transfers preserving total supply
-- Approve and transferFrom workflow
-- Mint only by owner
-- Burn reduces supply
-- Allowance operations
+1. Address ids are only 64 bits, derived from the first 8 bytes of the real address.
+2. `name` and `symbol` are capped at 8 ASCII characters.
+3. Mapping keys use XOR masks, not collision-resistant hashing.
+4. There are no ERC20 events.
+5. Allowance updates follow the simple overwrite pattern; there is no permit/increase/decrease allowance variant.
 
-## Code Organization
+## Future Improvements
 
-The assembly code is organized into logical sections:
-
-```
-├── Constants & Slots Definition
-├── Main Dispatcher (routes to functions)
-├── totalSupply() - Simple storage read
-├── balanceOf() - Balance lookup
-├── transfer() - Core transfer logic
-├── approve() - Allowance setting
-├── transferFrom() - Transfer with delegation
-├── allowance() - Allowance lookup
-├── mint() - Owner-only token creation
-├── burn() - Owner-only token destruction
-├── name() - Return token name metadata
-├── symbol() - Return token symbol metadata
-└── decimals() - Return decimal places metadata
-```
-
-Each function includes:
-- Clear parameter documentation
-- Input validation
-- Storage key computation
-- State updates with error handling
-
-## Register Allocation Strategy
-
-The implementation uses registers strategically:
-
-- **R0-R5:** Parameter loading and temporary computation
-- **R6-R12:** Key computation and balance tracking
-- **R13-R15:** Storage operations and return values
-
-This minimizes register pressure and keeps the code readable.
-
-## Future Enhancements
-
-1. **Event Simulation** - Store transfer logs in special storage slots
-2. **SafeERC20** - Add return value validation
-3. **Pause Mechanism** - Owner-controlled pause/unpause
-4. **Blacklist** - Owner-controlled address blocking
-5. **Rebase/Deflation** - Fee-on-transfer mechanism
-6. **Snapshot** - Historical balance tracking
-7. **Delegate/Voting** - Token holder voting power delegation
-
-## Reference Implementation
-
-This is based on OpenZeppelin's ERC20 implementation with simplifications for minichain's constraints:
-- No events (minichain limitation)
-- No external calls (single-contract focus)
-- Fixed 64-bit precision (no decimals configuration)
-- XOR-based key derivation (simplified hashing)
+- support full 20-byte address handling in the VM
+- return larger buffers from contracts for richer ABI behavior
+- add event/log support
+- use stronger storage key derivation
+- add richer token extensions like pause, snapshot, or vote delegation
