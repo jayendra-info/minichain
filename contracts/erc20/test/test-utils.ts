@@ -35,8 +35,7 @@ export async function initChain(dataDir: string): Promise<void> {
 export async function createAccount(dataDir: string, name: string): Promise<string> {
   await runMinichain("account", "new", "--name", name, "--data-dir", dataDir);
   const keyFile = `${dataDir}/keys/${name}.json`;
-  const keyContent = await Bun.file(keyFile).text();
-  const keyJson = JSON.parse(keyContent);
+  const keyJson = await Bun.file(keyFile).json() as { address: string };
   return keyJson.address;
 }
 
@@ -61,7 +60,7 @@ export async function mintNative(
 ): Promise<void> {
   await runMinichain(
     "account", "mint",
-    "--from", fromAuthority,
+    "--from", `@${fromAuthority}`,
     "--to", toAddress,
     "--amount", amount.toString(),
     "--data-dir", dataDir

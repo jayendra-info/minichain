@@ -1,205 +1,126 @@
-import { describe, it, beforeAll, afterAll, expect } from "bun:test";
-import { tmpdir } from "os";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdir, rm } from "fs/promises";
-import {
-  initChain,
-  createAccount,
-  produceBlock,
-  mintNative,
-} from "./test-utils";
-import { deploy, Contract, ERC20_ABI } from "./contract-client";
+import { tmpdir } from "os";
+import { createAccount, initChain, mintNative } from "./test-utils";
+import { ContractClient, deployErc20, SELECTORS } from "./contract-client";
 
 interface TestContext {
   dataDir: string;
   contractAddress: string;
+  ids: Record<string, bigint>;
 }
 
 let ctx: TestContext;
-let asAlice!: Contract<typeof ERC20_ABI>;
-let asBob!: Contract<typeof ERC20_ABI>;
-let asCharlie!: Contract<typeof ERC20_ABI>;
+let asAlice: ContractClient;
+let asBob: ContractClient;
+let asCharlie: ContractClient;
 
 beforeAll(async () => {
-  const tempDir = `${tmpdir()}/minichain-erc20-test-${Date.now()}`;
-  await mkdir(tempDir, { recursive: true });
-  console.log(`\nTest data directory: ${tempDir}`);
+  const dataDir = `${tmpdir()}/minichain-erc20-test-${Date.now()}`;
+  await mkdir(dataDir, { recursive: true });
 
-  console.log("Initializing chain...");
-  await initChain(tempDir);
+  await initChain(dataDir);
+  await createAccount(dataDir, "alice");
+  await createAccount(dataDir, "bob");
+  await createAccount(dataDir, "charlie");
 
-  console.log("Creating accounts...");
-  await createAccount(tempDir, "alice");
-  await createAccount(tempDir, "bob");
-  await createAccount(tempDir, "charlie");
-  console.log("  alice, bob, charlie created");
+  const { address: aliceAddress } =
+    await Bun.file(`${dataDir}/keys/alice.json`).json() as { address: string };
+  const { address: bobAddress } =
+    await Bun.file(`${dataDir}/keys/bob.json`).json() as { address: string };
+  const { address: charlieAddress } =
+    await Bun.file(`${dataDir}/keys/charlie.json`).json() as { address: string };
+  await mintNative(dataDir, "authority_0", aliceAddress, 1_000_000);
+  await mintNative(dataDir, "authority_0", bobAddress, 500_000);
+  await mintNative(dataDir, "authority_0", charlieAddress, 500_000);
 
-  const aliceAddr = await Bun.file(`${tempDir}/keys/alice.json`).text().then(t => JSON.parse(t).address);
-  console.log("Minting native tokens to alice...");
-  await mintNative(tempDir, "authority_0", aliceAddr, 1000000);
+  const deployed = await deployErc20(dataDir, "alice", {
+    name: "MiniCoin",
+    symbol: "MINI",
+    decimals: 18,
+    initialSupply: 0,
+  });
 
-  console.log("Deploying ERC20 contract...");
-  const contractAddress = await deploy(tempDir, "alice");
-  console.log(`  contract: ${contractAddress}`);
+  ctx = {
+    dataDir,
+    contractAddress: deployed.address,
+    ids: deployed.ids,
+  };
 
-  console.log("Producing initial block...");
-  await produceBlock(tempDir);
-
-  ctx = { dataDir: tempDir, contractAddress };
-
-  const erc20 = new Contract(tempDir, contractAddress, ERC20_ABI);
-  asAlice   = erc20.connect("alice");
-  asBob     = erc20.connect("bob");
-  asCharlie = erc20.connect("charlie");
+  asAlice = new ContractClient(dataDir, deployed.address, "alice");
+  asBob = new ContractClient(dataDir, deployed.address, "bob");
+  asCharlie = new ContractClient(dataDir, deployed.address, "charlie");
 }, 30000);
 
 afterAll(async () => {
   if (ctx?.dataDir) {
-    console.log(`\nCleaning up: ${ctx.dataDir}`);
     await rm(ctx.dataDir, { recursive: true, force: true });
   }
 });
 
 describe("ERC20 Contract E2E Tests", () => {
-  describe("Initial State", () => {
-    it("should have zero ERC20 balances initially", async () => {
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(alice).toBe(0);
-      expect(bob).toBe(0);
-      expect(charlie).toBe(0);
-    });
+  it("returns deployed metadata", async () => {
+    expect(await asAlice.queryString(SELECTORS.name)).toBe("MiniCoin");
+    expect(await asAlice.queryString(SELECTORS.symbol)).toBe("MINI");
+    expect(await asAlice.queryU64(SELECTORS.decimals)).toBe(18);
   });
 
-  describe("Minting", () => {
-    it("should mint tokens to alice (1000)", async () => {
-      await asAlice.call("mint", { to: 1, amount: 1000 });
-
-      const alice = await asAlice.call("balanceOf", { address: 1 });
-      expect(alice).toBe(1000);
-    });
-
-    it("should increase total supply after minting", async () => {
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(alice + bob + charlie).toBe(1000);
-    });
+  it("starts with zero balances and zero total supply", async () => {
+    expect(await asAlice.queryU64(SELECTORS.totalSupply)).toBe(0);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice])).toBe(0);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.bob])).toBe(0);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.charlie])).toBe(0);
   });
 
-  describe("Transfer", () => {
-    it("should deduct from sender and credit receiver", async () => {
-      await asAlice.call("transfer", { to: 2, amount: 300 });
-
-      const alice = await asAlice.call("balanceOf", { address: 1 });
-      const bob   = await asAlice.call("balanceOf", { address: 2 });
-
-      expect(alice).toBe(700);
-      expect(bob).toBe(300);
-    });
-
-    it("should preserve total supply after transfer", async () => {
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(alice + bob + charlie).toBe(1000);
-    });
+  it("mints tokens to alice", async () => {
+    await asAlice.send(SELECTORS.mint, [ctx.ids.alice, 1000]);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice])).toBe(1000);
+    expect(await asAlice.queryU64(SELECTORS.totalSupply)).toBe(1000);
   });
 
-  describe("Self-Transfer", () => {
-    it("should not change balance on self-transfer", async () => {
-      const before = await asAlice.call("balanceOf", { address: 1 });
-      await asAlice.call("transfer", { to: 1, amount: 100 });
-      const after = await asAlice.call("balanceOf", { address: 1 });
-
-      expect(after).toBe(before);
-    });
+  it("rejects mint attempts from non-owner", async () => {
+    await asBob.send(SELECTORS.mint, [ctx.ids.bob, 500]);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.bob])).toBe(0);
+    expect(await asAlice.queryU64(SELECTORS.totalSupply)).toBe(1000);
   });
 
-  describe("Approval", () => {
-    it("should approve spender", async () => {
-      await asAlice.call("approve", { spender: 2, amount: 200 });
-
-      const alice = await asAlice.call("balanceOf", { address: 1 });
-      const bob   = await asAlice.call("balanceOf", { address: 2 });
-      expect(alice).toBe(600);
-      expect(bob).toBe(300);
-    });
+  it("transfers from alice to bob", async () => {
+    await asAlice.send(SELECTORS.transfer, [ctx.ids.bob, 300]);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice])).toBe(700);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.bob])).toBe(300);
+    expect(await asAlice.queryU64(SELECTORS.totalSupply)).toBe(1000);
   });
 
-  describe("TransferFrom", () => {
-    it("should transfer on behalf of owner", async () => {
-      await asBob.call("transferFrom", { from: 1, to: 3, amount: 150 });
-
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(alice).toBe(450);
-      expect(charlie).toBe(150);
-    });
-
-    it("should preserve total supply after transferFrom", async () => {
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(alice + bob + charlie).toBe(1000);
-    });
+  it("keeps balance unchanged on self-transfer", async () => {
+    const before = await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice]);
+    await asAlice.send(SELECTORS.transfer, [ctx.ids.alice, 100]);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice])).toBe(before);
   });
 
-  describe("Burn", () => {
-    it("should burn tokens and reduce balance", async () => {
-      const beforeAlice = await asAlice.call("balanceOf", { address: 1 });
-      await asAlice.call("burn", { amount: 100 });
-      const afterAlice = await asAlice.call("balanceOf", { address: 1 });
+  it("tracks approvals and remaining allowance", async () => {
+    await asAlice.send(SELECTORS.approve, [ctx.ids.bob, 200]);
+    expect(await asAlice.queryU64(SELECTORS.allowance, [ctx.ids.alice, ctx.ids.bob])).toBe(200);
 
-      expect(afterAlice).toBe(beforeAlice - 100);
-    });
-
-    it("should decrease total supply after burn", async () => {
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(alice + bob + charlie).toBe(900);
-    });
+    await asBob.send(SELECTORS.transferFrom, [ctx.ids.alice, ctx.ids.charlie, 150]);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice])).toBe(550);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.charlie])).toBe(150);
+    expect(await asAlice.queryU64(SELECTORS.allowance, [ctx.ids.alice, ctx.ids.bob])).toBe(50);
+    expect(await asAlice.queryU64(SELECTORS.totalSupply)).toBe(1000);
   });
 
-  describe("Multiple Transfers", () => {
-    it("should handle sequential transfers", async () => {
-      await asBob.call("transfer",     { to: 3, amount: 50 });
-      await asCharlie.call("transfer", { to: 1, amount: 25 });
-
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(bob).toBe(200);
-      expect(charlie).toBe(125);
-      expect(alice).toBe(475);
-    });
+  it("burns tokens and reduces total supply", async () => {
+    await asAlice.send(SELECTORS.burn, [100]);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice])).toBe(450);
+    expect(await asAlice.queryU64(SELECTORS.totalSupply)).toBe(900);
   });
 
-  describe("Final State", () => {
-    it("should have correct final balances", async () => {
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
+  it("handles additional transfers after burn", async () => {
+    await asBob.send(SELECTORS.transfer, [ctx.ids.charlie, 50]);
+    await asCharlie.send(SELECTORS.transfer, [ctx.ids.alice, 25]);
 
-      expect(alice).toBe(475);
-      expect(bob).toBe(200);
-      expect(charlie).toBe(125);
-    });
-
-    it("should have total supply equal to sum of balances", async () => {
-      const alice   = await asAlice.call("balanceOf", { address: 1 });
-      const bob     = await asAlice.call("balanceOf", { address: 2 });
-      const charlie = await asAlice.call("balanceOf", { address: 3 });
-
-      expect(alice + bob + charlie).toBe(800);
-    });
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.alice])).toBe(475);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.bob])).toBe(250);
+    expect(await asAlice.queryU64(SELECTORS.balanceOf, [ctx.ids.charlie])).toBe(175);
+    expect(await asAlice.queryU64(SELECTORS.totalSupply)).toBe(900);
   });
 });

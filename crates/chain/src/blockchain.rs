@@ -2,12 +2,12 @@
 //!
 //! This module brings together all components: consensus, storage, mempool, and execution.
 
-use crate::executor::{BlockExecutionResult, Executor};
+use crate::executor::{BlockExecutionResult, ContractQuery, ContractQueryResult, Executor};
 use crate::mempool::{Mempool, MempoolConfig};
 use minichain_consensus::{
     Authority, BlockProposer, BlockValidator, PoAConfig, TransactionValidator,
 };
-use minichain_core::{Address, Block, Hash, Transaction};
+use minichain_core::{Address, Block, BlockHeader, Hash, Transaction};
 use minichain_storage::{ChainStore, StateManager, Storage};
 use thiserror::Error;
 
@@ -158,11 +158,14 @@ impl<'a> Blockchain<'a> {
         let transactions = self.mempool.get_pending(self.config.max_block_size);
 
         // Create block (proposer checks if it's their turn)
+        let next_timestamp =
+            BlockHeader::current_timestamp().max(parent.header.timestamp.saturating_add(1));
         let block = proposer.propose_block(
             new_height,
             parent_hash,
             transactions,
             parent.header.state_root, // We'll update after execution
+            next_timestamp,
         )?;
 
         Ok(block)
@@ -202,12 +205,37 @@ impl<'a> Blockchain<'a> {
         Ok(result)
     }
 
+    /// Execute a read-only contract query against the current state.
+    pub fn query_contract(
+        &self,
+        contract: &Address,
+        caller: Address,
+        data: &[u8],
+        call_value: u64,
+        gas_limit: u64,
+    ) -> Result<ContractQueryResult> {
+        let latest_block = self.get_latest_block()?;
+        let executor = Executor::new(&self.state);
+        Ok(executor.query_contract(
+            contract,
+            ContractQuery {
+                caller,
+                data,
+                call_value,
+                gas_limit,
+                block_number: latest_block.header.height,
+                timestamp: latest_block.header.timestamp,
+            },
+        )?)
+    }
+
     /// Import a block into the chain.
     ///
     /// This validates, executes, and stores the block.
-    pub fn import_block(&mut self, block: Block) -> Result<BlockExecutionResult> {
+    pub fn import_block(&mut self, mut block: Block) -> Result<BlockExecutionResult> {
         // Validate and execute
         let result = self.validate_and_execute_block(&block)?;
+        block.header.state_root = result.state_root;
 
         let block_hash = block.hash();
         let block_height = block.header.height;

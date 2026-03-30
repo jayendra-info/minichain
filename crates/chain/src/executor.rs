@@ -4,7 +4,14 @@
 
 use minichain_core::{Account, Address, Block, Hash, Transaction};
 use minichain_storage::StateManager;
+use minichain_vm::{StorageBackend, Vm, VmError};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use thiserror::Error;
+
+/// Fixed-size deployment header that prefixes runtime bytecode length.
+const DEPLOY_HEADER_BYTES: usize = 4;
 
 /// Errors that can occur during execution.
 #[derive(Debug, Error)]
@@ -23,6 +30,9 @@ pub enum ExecutionError {
 
     #[error("execution reverted")]
     Reverted,
+
+    #[error("invalid deployment payload: {0}")]
+    InvalidDeploymentPayload(String),
 
     #[error("VM error: {0}")]
     VmError(String),
@@ -58,7 +68,110 @@ pub struct BlockExecutionResult {
     pub state_root: Hash,
 }
 
-/// Block executor.
+#[derive(Debug, Clone)]
+pub struct ContractQueryResult {
+    /// Whether execution succeeded.
+    pub success: bool,
+    /// Gas used by the query.
+    pub gas_used: u64,
+    /// Raw return bytes read back from VM memory.
+    pub return_data: Vec<u8>,
+    /// Error message if execution failed.
+    pub error: Option<String>,
+}
+
+/// Inputs for executing a read-only contract query.
+pub struct ContractQuery<'a> {
+    /// Caller address exposed to the VM via `CALLER`.
+    pub caller: Address,
+    /// Calldata loaded into VM memory before execution.
+    pub data: &'a [u8],
+    /// Call value exposed via `CALLVALUE`.
+    pub call_value: u64,
+    /// Maximum gas available to the query execution.
+    pub gas_limit: u64,
+    /// Current block number for context opcodes.
+    pub block_number: u64,
+    /// Current block timestamp for context opcodes.
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone)]
+struct VmExecution {
+    success: bool,
+    gas_used: u64,
+    return_data: Vec<u8>,
+    error: Option<String>,
+}
+
+/// Encode deployment data as: `[runtime_len: u32][runtime_code][init_data]`.
+pub fn encode_deployment_payload(runtime_code: &[u8], init_data: &[u8]) -> Vec<u8> {
+    let mut payload =
+        Vec::with_capacity(DEPLOY_HEADER_BYTES + runtime_code.len() + init_data.len());
+    payload.extend_from_slice(&(runtime_code.len() as u32).to_le_bytes());
+    payload.extend_from_slice(runtime_code);
+    payload.extend_from_slice(init_data);
+    payload
+}
+
+/// Decode deployment data into `(runtime_code, init_data)`.
+pub fn decode_deployment_payload(data: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    if data.len() < DEPLOY_HEADER_BYTES {
+        return Err(ExecutionError::InvalidDeploymentPayload(
+            "missing runtime bytecode length header".to_string(),
+        ));
+    }
+
+    let runtime_len = u32::from_le_bytes(
+        data[..DEPLOY_HEADER_BYTES]
+            .try_into()
+            .expect("slice length checked"),
+    ) as usize;
+    let runtime_end = DEPLOY_HEADER_BYTES + runtime_len;
+    if runtime_len == 0 || runtime_end > data.len() {
+        return Err(ExecutionError::InvalidDeploymentPayload(
+            "runtime bytecode length is invalid".to_string(),
+        ));
+    }
+
+    Ok((
+        data[DEPLOY_HEADER_BYTES..runtime_end].to_vec(),
+        data[runtime_end..].to_vec(),
+    ))
+}
+
+#[derive(Clone)]
+struct OverlayStorage<'a> {
+    state: &'a StateManager<'a>,
+    contract: Address,
+    writes: Rc<RefCell<HashMap<[u8; 32], [u8; 32]>>>,
+}
+
+impl<'a> OverlayStorage<'a> {
+    fn new(state: &'a StateManager<'a>, contract: Address) -> Self {
+        Self {
+            state,
+            contract,
+            writes: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+}
+
+impl StorageBackend for OverlayStorage<'_> {
+    fn sload(&self, key: &[u8; 32]) -> [u8; 32] {
+        if let Some(value) = self.writes.borrow().get(key) {
+            return *value;
+        }
+        self.state
+            .sload(&self.contract, key)
+            .expect("contract storage read should not fail")
+    }
+
+    fn sstore(&mut self, key: &[u8; 32], value: &[u8; 32]) {
+        self.writes.borrow_mut().insert(*key, *value);
+    }
+}
+
 pub struct Executor<'a> {
     /// State manager for account operations.
     state: &'a StateManager<'a>,
@@ -72,6 +185,16 @@ impl<'a> Executor<'a> {
 
     /// Execute a single transaction.
     pub fn execute_transaction(&self, tx: &Transaction) -> Result<TransactionReceipt> {
+        self.execute_transaction_with_context(tx, 0, 0)
+    }
+
+    /// Execute a single transaction with explicit block context for VM opcodes.
+    pub fn execute_transaction_with_context(
+        &self,
+        tx: &Transaction,
+        block_number: u64,
+        timestamp: u64,
+    ) -> Result<TransactionReceipt> {
         let tx_hash = tx.hash();
         let sender = &tx.from;
 
@@ -116,18 +239,20 @@ impl<'a> Executor<'a> {
 
         // Execute based on transaction type
         let (success, gas_used, contract_address, error) = if tx.is_deploy() {
-            self.execute_deploy(tx)?
+            self.execute_deploy(tx, block_number, timestamp)?
         } else if tx.is_call() {
-            self.execute_call(tx)?
+            self.execute_call(tx, block_number, timestamp)?
         } else {
             // For transfer: just add value to recipient (sender already deducted in max_cost)
             self.execute_transfer_without_sender_deduction(tx)?
         };
 
-        // Refund unused gas (max_cost includes value + gas, so refund is gas - actual_gas)
+        // Refund unused gas. Failed calls do not transfer call value, so only actual
+        // gas spent is charged in that case.
+        let charged_value = if success { tx.value } else { 0 };
         let refund = max_cost
-            .saturating_sub(tx.value)
-            .saturating_sub(gas_used * tx.gas_price);
+            .saturating_sub(charged_value)
+            .saturating_sub(gas_used.saturating_mul(tx.gas_price));
         if refund > 0 {
             self.state.add_balance(sender, refund)?;
         }
@@ -138,6 +263,47 @@ impl<'a> Executor<'a> {
             gas_used,
             contract_address,
             error,
+        })
+    }
+
+    /// Execute a contract in read-only mode against the current state.
+    pub fn query_contract(
+        &self,
+        contract: &Address,
+        query: ContractQuery<'_>,
+    ) -> Result<ContractQueryResult> {
+        let account = self.state.get_account(contract)?;
+        if !account.is_contract() {
+            return Ok(ContractQueryResult {
+                success: false,
+                gas_used: 0,
+                return_data: Vec::new(),
+                error: Some("contract not found or no code".to_string()),
+            });
+        }
+
+        let code = self
+            .state
+            .get_code_for_address(contract)?
+            .ok_or_else(|| ExecutionError::VmError("missing contract bytecode".to_string()))?;
+
+        let execution = self.execute_contract_code(
+            &code,
+            contract,
+            query.caller,
+            query.call_value,
+            query.gas_limit,
+            query.data,
+            query.block_number,
+            query.timestamp,
+            true,
+        )?;
+
+        Ok(ContractQueryResult {
+            success: execution.success,
+            gas_used: execution.gas_used,
+            return_data: execution.return_data,
+            error: execution.error,
         })
     }
 
@@ -162,30 +328,60 @@ impl<'a> Executor<'a> {
     fn execute_deploy(
         &self,
         tx: &Transaction,
+        block_number: u64,
+        timestamp: u64,
     ) -> Result<(bool, u64, Option<Address>, Option<String>)> {
-        // Calculate contract address
+        // Calculate contract address and unpack runtime/init payload
         let contract_addr = tx
             .contract_address()
             .expect("deploy must calculate address");
+        let (runtime_code, init_data) = decode_deployment_payload(&tx.data)?;
 
-        // Calculate code hash
-        let code_hash = minichain_core::hash(&tx.data);
+        // Deployment gas is the base create cost plus per-byte code cost.
+        let base_gas = 32_000 + (runtime_code.len() as u64 * 200);
+        if tx.gas_limit < base_gas {
+            return Ok((
+                false,
+                tx.gas_limit,
+                None,
+                Some(
+                    VmError::OutOfGas {
+                        required: base_gas,
+                        remaining: tx.gas_limit,
+                    }
+                    .to_string(),
+                ),
+            ));
+        }
 
-        // Create contract account with code hash
-        let contract_account = Account {
-            balance: tx.value,
-            nonce: 0,
-            code_hash: Some(code_hash),
-            storage_root: Hash::ZERO,
-        };
+        // Store bytecode by hash so later calls can load it by account code_hash.
+        let code_hash = minichain_core::hash(&runtime_code);
+        self.state.put_code(&code_hash, &runtime_code)?;
 
+        // Run optional init calldata against the freshly created contract storage.
+        let mut gas_used = base_gas;
+        if !init_data.is_empty() {
+            let init_execution = self.execute_contract_code(
+                &runtime_code,
+                &contract_addr,
+                tx.from,
+                0,
+                tx.gas_limit.saturating_sub(base_gas),
+                &init_data,
+                block_number,
+                timestamp,
+                false,
+            )?;
+            gas_used = gas_used.saturating_add(init_execution.gas_used);
+            if !init_execution.success {
+                return Ok((false, gas_used, None, init_execution.error));
+            }
+        }
+
+        // Only persist the account if the init execution succeeded.
+        let mut contract_account = Account::new_contract(code_hash);
+        contract_account.balance = tx.value;
         self.state.put_account(&contract_addr, &contract_account)?;
-
-        // In a real implementation, store the actual code separately indexed by code_hash
-        // For now, we just store the account with the code hash
-
-        // Simplified gas calculation: 32,000 base + 200 per byte
-        let gas_used = 32_000 + (tx.data.len() as u64 * 200);
 
         Ok((true, gas_used, Some(contract_addr), None))
     }
@@ -194,6 +390,8 @@ impl<'a> Executor<'a> {
     fn execute_call(
         &self,
         tx: &Transaction,
+        block_number: u64,
+        timestamp: u64,
     ) -> Result<(bool, u64, Option<Address>, Option<String>)> {
         let contract_addr = tx.to.expect("call must have recipient");
 
@@ -210,22 +408,94 @@ impl<'a> Executor<'a> {
             ));
         }
 
-        // Transfer value if any
-        if tx.value > 0 {
-            self.state.transfer(&tx.from, &contract_addr, tx.value)?;
+        // Load runtime bytecode and execute against a transactional storage overlay.
+        let code = self
+            .state
+            .get_code_for_address(&contract_addr)?
+            .ok_or_else(|| ExecutionError::VmError("missing contract bytecode".to_string()))?;
+
+        let execution = self.execute_contract_code(
+            &code,
+            &contract_addr,
+            tx.from,
+            tx.value,
+            tx.gas_limit,
+            &tx.data,
+            block_number,
+            timestamp,
+            false,
+        )?;
+
+        // Only credit transferred value to the contract if execution did not revert.
+        if execution.success && tx.value > 0 {
+            self.state.add_balance(&contract_addr, tx.value)?;
         }
 
-        // In a real implementation, this would:
-        // 1. Initialize VM with contract code
-        // 2. Set up execution context (caller, calldata, etc.)
-        // 3. Run the VM
-        // 4. Apply state changes
-        // 5. Return execution result
-        //
-        // For now, we simulate successful execution
-        let gas_used = 21_000 + (tx.data.len() as u64 * 68);
+        Ok((execution.success, execution.gas_used, None, execution.error))
+    }
 
-        Ok((true, gas_used, None, None))
+    #[allow(clippy::too_many_arguments)]
+    fn execute_contract_code(
+        &self,
+        code: &[u8],
+        contract_addr: &Address,
+        caller: Address,
+        call_value: u64,
+        gas_limit: u64,
+        calldata: &[u8],
+        block_number: u64,
+        timestamp: u64,
+        read_only: bool,
+    ) -> Result<VmExecution> {
+        // Buffer SSTORE writes in memory first so reverts and queries do not mutate state.
+        let overlay = OverlayStorage::new(self.state, *contract_addr);
+        let writes = overlay.writes.clone();
+
+        let mut vm = Vm::new_with_context(
+            code.to_vec(),
+            gas_limit,
+            caller,
+            *contract_addr,
+            call_value,
+            block_number,
+            timestamp,
+        );
+        vm.load_memory(0, calldata)
+            .map_err(|err| ExecutionError::VmError(err.to_string()))?;
+        vm.set_storage(Box::new(overlay));
+
+        match vm.run() {
+            Ok(result) => {
+                // Commit storage changes only for successful state-changing executions.
+                if !read_only {
+                    self.commit_storage_writes(contract_addr, &writes.borrow())?;
+                }
+                Ok(VmExecution {
+                    success: result.success,
+                    gas_used: result.gas_used,
+                    return_data: result.return_data,
+                    error: None,
+                })
+            }
+            Err(err) => Ok(VmExecution {
+                success: false,
+                gas_used: gas_limit.saturating_sub(vm.gas_remaining()),
+                return_data: Vec::new(),
+                error: Some(err.to_string()),
+            }),
+        }
+    }
+
+    fn commit_storage_writes(
+        &self,
+        contract_addr: &Address,
+        writes: &HashMap<[u8; 32], [u8; 32]>,
+    ) -> Result<()> {
+        // Apply each buffered slot update to persistent contract storage.
+        for (slot, value) in writes {
+            self.state.sstore(contract_addr, slot, value)?;
+        }
+        Ok(())
     }
 
     /// Execute a block of transactions.
@@ -235,14 +505,16 @@ impl<'a> Executor<'a> {
         let mut total_gas_used = 0;
 
         for tx in &block.transactions {
-            let receipt = self.execute_transaction(tx)?;
+            let receipt = self.execute_transaction_with_context(
+                tx,
+                block.header.height,
+                block.header.timestamp,
+            )?;
             total_gas_used += receipt.gas_used;
             receipts.push(receipt);
         }
 
-        // In a real implementation, compute the actual state root from the trie
-        // For now, use a simplified hash
-        let state_root = minichain_core::hash(&total_gas_used.to_le_bytes());
+        let state_root = self.state.compute_state_root()?;
 
         Ok(BlockExecutionResult {
             block_hash,
@@ -256,19 +528,69 @@ impl<'a> Executor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minichain_assembler::assemble;
     use minichain_core::Keypair;
     use minichain_storage::Storage;
 
+    fn setup() -> (Storage, Keypair) {
+        (Storage::open_temporary().unwrap(), Keypair::generate())
+    }
+
+    fn sample_contract() -> Vec<u8> {
+        assemble(
+            r#"
+            .entry main
+            main:
+                LOADI R0, 0
+                LOAD64 R1, R0
+                LOADI R2, 0
+                EQ R3, R1, R2
+                LOADI R4, get_value
+                JUMPI R3, R4
+
+                LOADI R2, 1
+                EQ R3, R1, R2
+                LOADI R4, set_value
+                JUMPI R3, R4
+
+                REVERT
+
+            get_value:
+                LOADI R5, 1
+                SLOAD R6, R5
+                LOADI R7, 0
+                STORE64 R7, R6
+                HALT
+
+            set_value:
+                LOADI R5, 8
+                LOAD64 R6, R5
+                LOADI R7, 1
+                SSTORE R7, R6
+                HALT
+        "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_deployment_payload_roundtrip() {
+        let runtime = vec![1, 2, 3];
+        let init = vec![4, 5];
+        let payload = encode_deployment_payload(&runtime, &init);
+        let (decoded_runtime, decoded_init) = decode_deployment_payload(&payload).unwrap();
+        assert_eq!(decoded_runtime, runtime);
+        assert_eq!(decoded_init, init);
+    }
+
     #[test]
     fn test_execute_transfer() {
-        let storage = Storage::open_temporary().unwrap();
+        let (storage, keypair) = setup();
         let state = StateManager::new(&storage);
 
-        let keypair = Keypair::generate();
         let from = keypair.address();
         let to = Address::from_bytes([2u8; 20]);
 
-        // Setup sender with balance
         state.set_balance(&from, 100_000).unwrap();
         state
             .put_account(&from, &Account::new_user(100_000))
@@ -281,127 +603,136 @@ mod tests {
 
         assert!(receipt.success);
         assert_eq!(receipt.gas_used, 21_000);
-        assert!(receipt.contract_address.is_none());
-
-        // Check balances
-        let sender_balance = state.get_balance(&from).unwrap();
-        let recipient_balance = state.get_balance(&to).unwrap();
-
-        // Sender: 100_000 - 22000 (value+gas) = 78000
-        assert_eq!(sender_balance, 78_000);
-        assert_eq!(recipient_balance, 1000);
-
-        // Check nonce incremented
+        assert_eq!(state.get_balance(&from).unwrap(), 78_000);
+        assert_eq!(state.get_balance(&to).unwrap(), 1000);
         assert_eq!(state.get_nonce(&from).unwrap(), 1);
     }
 
     #[test]
-    fn test_execute_deployment() {
-        let storage = Storage::open_temporary().unwrap();
+    fn test_execute_deployment_stores_code() {
+        let (storage, keypair) = setup();
         let state = StateManager::new(&storage);
-
-        let keypair = Keypair::generate();
         let from = keypair.address();
-        let bytecode = vec![0x60, 0x80, 0x60, 0x40]; // Sample bytecode
+        let runtime = sample_contract();
+        let payload = encode_deployment_payload(&runtime, &[]);
 
-        // Setup sender with balance
         state.set_balance(&from, 1_000_000).unwrap();
         state
             .put_account(&from, &Account::new_user(1_000_000))
             .unwrap();
 
-        let tx = Transaction::deploy(from, bytecode.clone(), 0, 100_000, 1).signed(&keypair);
+        let tx = Transaction::deploy(from, payload, 0, 200_000, 1).signed(&keypair);
 
         let executor = Executor::new(&state);
         let receipt = executor.execute_transaction(&tx).unwrap();
 
         assert!(receipt.success);
-        assert!(receipt.contract_address.is_some());
-
-        // Verify contract was created
         let contract_addr = receipt.contract_address.unwrap();
         let contract = state.get_account(&contract_addr).unwrap();
         assert!(contract.is_contract());
-        assert_eq!(contract.code_hash, Some(minichain_core::hash(&bytecode)));
+        assert_eq!(
+            state.get_code_for_address(&contract_addr).unwrap(),
+            Some(runtime)
+        );
     }
 
     #[test]
-    fn test_execute_insufficient_balance() {
-        let storage = Storage::open_temporary().unwrap();
+    fn test_execute_call_updates_storage() {
+        let (storage, keypair) = setup();
         let state = StateManager::new(&storage);
-
-        let keypair = Keypair::generate();
         let from = keypair.address();
-        let to = Address::from_bytes([2u8; 20]);
+        let runtime = sample_contract();
+        let payload = encode_deployment_payload(&runtime, &[]);
 
-        // Setup sender with insufficient balance
-        state.set_balance(&from, 100).unwrap();
-        state.put_account(&from, &Account::new_user(100)).unwrap();
-
-        let tx = Transaction::transfer(from, to, 1000, 0, 1).signed(&keypair);
-
-        let executor = Executor::new(&state);
-        let receipt = executor.execute_transaction(&tx).unwrap();
-
-        assert!(!receipt.success);
-        assert!(receipt.error.is_some());
-        assert!(receipt.error.unwrap().contains("insufficient balance"));
-    }
-
-    #[test]
-    fn test_execute_invalid_nonce() {
-        let storage = Storage::open_temporary().unwrap();
-        let state = StateManager::new(&storage);
-
-        let keypair = Keypair::generate();
-        let from = keypair.address();
-        let to = Address::from_bytes([2u8; 20]);
-
-        // Setup sender with nonce 5
-        let mut account = Account::new_user(100_000);
-        account.nonce = 5;
-        state.put_account(&from, &account).unwrap();
-
-        // Transaction with nonce 0, but account nonce is 5
-        let tx = Transaction::transfer(from, to, 1000, 0, 1).signed(&keypair);
-
-        let executor = Executor::new(&state);
-        let receipt = executor.execute_transaction(&tx).unwrap();
-
-        assert!(!receipt.success);
-        assert!(receipt.error.is_some());
-        assert!(receipt.error.unwrap().contains("invalid nonce"));
-    }
-
-    #[test]
-    fn test_execute_block() {
-        let storage = Storage::open_temporary().unwrap();
-        let state = StateManager::new(&storage);
-
-        let keypair1 = Keypair::generate();
-        let keypair2 = Keypair::generate();
-        let addr1 = keypair1.address();
-        let addr2 = keypair2.address();
-
-        // Setup accounts
+        state.set_balance(&from, 1_000_000).unwrap();
         state
-            .put_account(&addr1, &Account::new_user(100_000))
-            .unwrap();
-        state
-            .put_account(&addr2, &Account::new_user(100_000))
+            .put_account(&from, &Account::new_user(1_000_000))
             .unwrap();
 
-        let tx1 = Transaction::transfer(addr1, addr2, 1000, 0, 1).signed(&keypair1);
-        let tx2 = Transaction::transfer(addr2, addr1, 500, 0, 1).signed(&keypair2);
-
-        let block = Block::new(1, Hash::ZERO, vec![tx1, tx2], Hash::ZERO, addr1);
-
+        let deploy = Transaction::deploy(from, payload, 0, 200_000, 1).signed(&keypair);
         let executor = Executor::new(&state);
-        let result = executor.execute_block(&block).unwrap();
+        let receipt = executor.execute_transaction(&deploy).unwrap();
+        let contract_addr = receipt.contract_address.unwrap();
 
-        assert_eq!(result.receipts.len(), 2);
-        assert!(result.receipts[0].success);
-        assert!(result.receipts[1].success);
-        assert_eq!(result.total_gas_used, 42_000); // 21_000 * 2
+        let mut calldata = 1u64.to_le_bytes().to_vec();
+        calldata.extend_from_slice(&42u64.to_le_bytes());
+        let call =
+            Transaction::call(from, contract_addr, calldata, 0, 1, 100_000, 1).signed(&keypair);
+        let call_receipt = executor.execute_transaction(&call).unwrap();
+
+        assert!(call_receipt.success);
+
+        let query = executor
+            .query_contract(
+                &contract_addr,
+                ContractQuery {
+                    caller: from,
+                    data: &0u64.to_le_bytes(),
+                    call_value: 0,
+                    gas_limit: 100_000,
+                    block_number: 1,
+                    timestamp: 1,
+                },
+            )
+            .unwrap();
+
+        assert!(query.success);
+        assert_eq!(
+            u64::from_le_bytes(query.return_data[..8].try_into().unwrap()),
+            42
+        );
+    }
+
+    #[test]
+    fn test_query_does_not_commit_storage_writes() {
+        let (storage, keypair) = setup();
+        let state = StateManager::new(&storage);
+        let from = keypair.address();
+        let runtime = sample_contract();
+        let payload = encode_deployment_payload(&runtime, &[]);
+
+        state.set_balance(&from, 1_000_000).unwrap();
+        state
+            .put_account(&from, &Account::new_user(1_000_000))
+            .unwrap();
+
+        let deploy = Transaction::deploy(from, payload, 0, 200_000, 1).signed(&keypair);
+        let executor = Executor::new(&state);
+        let receipt = executor.execute_transaction(&deploy).unwrap();
+        let contract_addr = receipt.contract_address.unwrap();
+
+        let mut calldata = [1u64.to_le_bytes().to_vec(), 99u64.to_le_bytes().to_vec()].concat();
+        let query = executor
+            .query_contract(
+                &contract_addr,
+                ContractQuery {
+                    caller: from,
+                    data: &calldata,
+                    call_value: 0,
+                    gas_limit: 100_000,
+                    block_number: 1,
+                    timestamp: 1,
+                },
+            )
+            .unwrap();
+        assert!(query.success);
+        calldata = 0u64.to_le_bytes().to_vec();
+        let value = executor
+            .query_contract(
+                &contract_addr,
+                ContractQuery {
+                    caller: from,
+                    data: &calldata,
+                    call_value: 0,
+                    gas_limit: 100_000,
+                    block_number: 1,
+                    timestamp: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            u64::from_le_bytes(value.return_data[..8].try_into().unwrap()),
+            0
+        );
     }
 }

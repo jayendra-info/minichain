@@ -98,7 +98,9 @@ pub fn run(args: InitArgs) -> Result<()> {
 
     // Create and sign genesis block with first authority
     let genesis_authority = &keypairs[0];
-    let genesis = Block::genesis(genesis_authority.address()).signed(genesis_authority);
+    let mut genesis = Block::genesis(genesis_authority.address());
+    genesis.header.timestamp = genesis.header.timestamp.saturating_sub(10);
+    let genesis = genesis.signed(genesis_authority);
 
     // Initialize blockchain with genesis
     blockchain

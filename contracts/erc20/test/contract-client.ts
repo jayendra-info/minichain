@@ -1,121 +1,155 @@
-import { runMinichain, produceBlock } from "./test-utils";
+import { produceBlock, runMinichain } from "./test-utils";
 
 const ERC20_CONTRACT_PATH = (() => {
   const base = import.meta.dir.replace(/\/test$/, "");
   return `${base}/src/erc20.asm`;
 })();
 
-// ─── ABI type layer ───────────────────────────────────────────────────────────
+type Arg = number | bigint;
+type AddressMap = Record<string, string>;
+type AddressIdMap = Record<string, bigint>;
 
-type AbiParamType = "uint64";
-type AbiOutput = AbiParamType | null;
-
-interface AbiParam {
-  name: string;
-  type: AbiParamType;
+function encodeWord(value: Arg): string {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setBigUint64(0, BigInt(value), true);
+  return Buffer.from(buffer).toString("hex");
 }
 
-interface AbiFunction {
-  selector: number;
-  inputs: readonly AbiParam[];
-  output: AbiOutput;
+function encodeCall(selector: number, args: readonly Arg[]): string {
+  return [encodeWord(selector), ...args.map(encodeWord)].join("");
 }
 
-type Abi = Record<string, AbiFunction>;
-
-// Named argument object derived from the inputs tuple: { to: number; amount: number }
-type ArgsFromInputs<T extends readonly AbiParam[]> = {
-  [P in T[number] as P["name"]]: number;
-};
-
-type ResultFromOutput<T extends AbiOutput> = T extends null ? void : number;
-
-// ─── ERC20 ABI definition ─────────────────────────────────────────────────────
-
-export const ERC20_ABI = {
-  totalSupply:  { selector: 0x00, inputs: [],                                   output: "uint64" },
-  balanceOf:    { selector: 0x01, inputs: [{ name: "address", type: "uint64" }], output: "uint64" },
-  transfer:     { selector: 0x02, inputs: [{ name: "to",      type: "uint64" },
-                                           { name: "amount",  type: "uint64" }], output: null },
-  approve:      { selector: 0x03, inputs: [{ name: "spender", type: "uint64" },
-                                           { name: "amount",  type: "uint64" }], output: null },
-  transferFrom: { selector: 0x04, inputs: [{ name: "from",    type: "uint64" },
-                                           { name: "to",      type: "uint64" },
-                                           { name: "amount",  type: "uint64" }], output: null },
-  allowance:    { selector: 0x05, inputs: [{ name: "owner",   type: "uint64" },
-                                           { name: "spender", type: "uint64" }], output: "uint64" },
-  mint:         { selector: 0x06, inputs: [{ name: "to",      type: "uint64" },
-                                           { name: "amount",  type: "uint64" }], output: null },
-  burn:         { selector: 0x07, inputs: [{ name: "amount",  type: "uint64" }], output: null },
-  name:         { selector: 0x08, inputs: [],                                   output: "uint64" },
-  symbol:       { selector: 0x09, inputs: [],                                   output: "uint64" },
-  decimals:     { selector: 0x0a, inputs: [],                                   output: "uint64" },
-} as const satisfies Abi;
-
-// ─── Encoding / decoding ──────────────────────────────────────────────────────
-
-function encodeCalldata(
-  selector: number,
-  inputs: readonly AbiParam[],
-  args: Record<string, number>
-): string {
-  const enc = (v: number) => v.toString(16).padStart(16, "0");
-  return (
-    selector.toString(16).padStart(2, "0") +
-    inputs.map((p) => enc(args[p.name] ?? 0)).join("")
-  );
+function decodeU64(hexOutput: string): number {
+  const match = hexOutput.match(/Result:\s*0x([0-9a-f]+)/i);
+  if (!match) return 0;
+  const bytes = Buffer.from(match[1]!, "hex");
+  const padded = Buffer.concat([bytes, Buffer.alloc(Math.max(0, 8 - bytes.length))]).subarray(0, 8);
+  return Number(padded.readBigUInt64LE(0));
 }
 
-function parseResult(output: string): number {
-  const match = output.match(/Result:\s*0x([0-9a-f]+)/i);
-  return match ? parseInt(match[1] ?? "0", 16) : 0;
+function decodeString(hexOutput: string): string {
+  const match = hexOutput.match(/Result:\s*0x([0-9a-f]+)/i);
+  if (!match) return "";
+  return Buffer.from(match[1]!, "hex").toString("ascii").replace(/\0+$/, "");
 }
 
-// ─── Contract class ───────────────────────────────────────────────────────────
+function encodeAscii8(value: string): bigint {
+  const buffer = Buffer.alloc(8);
+  buffer.write(value.slice(0, 8), 0, "ascii");
+  return buffer.readBigUInt64LE(0);
+}
 
-export class Contract<A extends Abi> {
+export function addressToId(address: string): bigint {
+  const bytes = Buffer.from(address.replace(/^0x/i, ""), "hex");
+  return bytes.readBigUInt64LE(0);
+}
+
+async function keyAddress(dataDir: string, alias: string): Promise<string> {
+  const keyJson = await Bun.file(`${dataDir}/keys/${alias}.json`).json() as { address: string };
+  return keyJson.address;
+}
+
+export const SELECTORS = {
+  totalSupply: 0x00,
+  balanceOf: 0x01,
+  transfer: 0x02,
+  approve: 0x03,
+  transferFrom: 0x04,
+  allowance: 0x05,
+  mint: 0x06,
+  burn: 0x07,
+  name: 0x08,
+  symbol: 0x09,
+  decimals: 0x0a,
+  init: 0xff,
+} as const;
+
+export class ContractClient {
   constructor(
     private readonly dataDir: string,
     private readonly address: string,
-    private readonly abi: A,
-    private readonly caller?: string
+    private readonly callerAlias: string,
   ) {}
 
-  /** Returns a new Contract instance bound to the given caller name. */
-  connect(caller: string): Contract<A> {
-    return new Contract(this.dataDir, this.address, this.abi, caller);
+  private callerRef(): string {
+    return `@${this.callerAlias}`;
   }
 
-  async call<K extends keyof A & string>(
-    fn: K,
-    args: ArgsFromInputs<A[K]["inputs"]>
-  ): Promise<ResultFromOutput<A[K]["output"]>> {
-    if (!this.caller) throw new Error("No caller set — use .connect(callerName) first");
-    const { selector, inputs, output } = this.abi[fn] as AbiFunction;
-    const data = encodeCalldata(selector, inputs, args as Record<string, number>);
-    const raw = await runMinichain(
+  async queryU64(selector: number, args: readonly Arg[] = []): Promise<number> {
+    const output = await runMinichain(
       "call",
-      "--from", this.caller,
+      "--query",
+      "--from", this.callerRef(),
       "--to", this.address,
-      "--data", data,
-      "--data-dir", this.dataDir
+      "--data", encodeCall(selector, args),
+      "--data-dir", this.dataDir,
+    );
+    return decodeU64(output);
+  }
+
+  async queryString(selector: number): Promise<string> {
+    const output = await runMinichain(
+      "call",
+      "--query",
+      "--from", this.callerRef(),
+      "--to", this.address,
+      "--data", encodeCall(selector, []),
+      "--data-dir", this.dataDir,
+    );
+    return decodeString(output);
+  }
+
+  async send(selector: number, args: readonly Arg[] = []): Promise<void> {
+    await runMinichain(
+      "call",
+      "--from", this.callerRef(),
+      "--to", this.address,
+      "--data", encodeCall(selector, args),
+      "--data-dir", this.dataDir,
+      "--gas-limit", "250000",
     );
     await produceBlock(this.dataDir);
-    return (output !== null ? parseResult(raw) : undefined) as ResultFromOutput<A[K]["output"]>;
   }
 }
 
-// ─── deploy ───────────────────────────────────────────────────────────────────
+export async function deployErc20(
+  dataDir: string,
+  ownerAlias: string,
+  metadata: { name: string; symbol: string; decimals: number; initialSupply?: number; initialRecipientAlias?: string },
+): Promise<{ address: string; ids: AddressIdMap; addresses: AddressMap }> {
+  const addresses = {
+    alice: await keyAddress(dataDir, "alice"),
+    bob: await keyAddress(dataDir, "bob"),
+    charlie: await keyAddress(dataDir, "charlie"),
+  };
+  const ids = Object.fromEntries(
+    Object.entries(addresses).map(([alias, address]) => [alias, addressToId(address)]),
+  ) as AddressIdMap;
+  const initialRecipientAlias = metadata.initialRecipientAlias ?? ownerAlias;
+  const initData = encodeCall(SELECTORS.init, [
+    ids[ownerAlias]!,
+    encodeAscii8(metadata.name),
+    encodeAscii8(metadata.symbol),
+    metadata.decimals,
+    ids[initialRecipientAlias]!,
+    metadata.initialSupply ?? 0,
+  ]);
 
-export async function deploy(dataDir: string, fromName: string): Promise<string> {
   const output = await runMinichain(
     "deploy",
-    "--from", fromName,
+    "--from", `@${ownerAlias}`,
     "--source", ERC20_CONTRACT_PATH,
-    "--gas-limit", "250000",
-    "--data-dir", dataDir
+    "--init-data", initData,
+    "--gas-limit", "400000",
+    "--data-dir", dataDir,
   );
   const match = output.match(/Contract Address:\s*(0x[0-9a-f]+)/i);
-  if (!match) throw new Error(`Failed to parse contract address: ${output}`);
-  return match[1]!;
+  if (!match) {
+    throw new Error(`Failed to parse contract address: ${output}`);
+  }
+
+  await produceBlock(dataDir);
+
+  return { address: match[1]!, ids, addresses };
 }

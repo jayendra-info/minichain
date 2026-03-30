@@ -41,5 +41,8 @@ pub mod mempool;
 
 // Re-export commonly used types
 pub use blockchain::{Blockchain, BlockchainConfig, BlockchainError, BlockchainStats};
-pub use executor::{BlockExecutionResult, ExecutionError, Executor, TransactionReceipt};
+pub use executor::{
+    decode_deployment_payload, encode_deployment_payload, BlockExecutionResult, ContractQuery,
+    ContractQueryResult, ExecutionError, Executor, TransactionReceipt,
+};
 pub use mempool::{Mempool, MempoolConfig, MempoolError, MempoolStats};

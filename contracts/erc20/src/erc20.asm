@@ -2,415 +2,367 @@
 ; ERC20 Token Contract for Minichain
 ;=============================================================================
 ;
-; Standard ERC20 implementation with mint, burn, and metadata functions.
+; Calldata layout: 8-byte little-endian selector followed by u64 arguments.
 ;
-; Storage Layout:
-;   Slot 0: total_supply (u64)
-;   Slot 1: owner_address (u64)
-;   Slot 2: name (encoded as u64, first 8 chars)
-;   Slot 3: symbol (encoded as u64, first 8 chars)
-;   Slot 4: decimals (u64)
-;   Slot hash(address || 0): balances[address]
-;   Slot hash(address || hash(spender || 1)): allowances[owner][spender]
+; Selectors:
+;   0x00 totalSupply()
+;   0x01 balanceOf(address_id)
+;   0x02 transfer(to, amount)
+;   0x03 approve(spender, amount)
+;   0x04 transferFrom(from, to, amount)
+;   0x05 allowance(owner, spender)
+;   0x06 mint(to, amount)
+;   0x07 burn(amount)
+;   0x08 name()
+;   0x09 symbol()
+;   0x0A decimals()
+;   0xFF init(owner, name, symbol, decimals, initial_to, initial_supply)
 ;
-; Function Selectors (first 8 bytes of calldata):
-;   0x00: totalSupply()
-;   0x01: balanceOf(address)
-;   0x02: transfer(to, amount)
-;   0x03: approve(spender, amount)
-;   0x04: transferFrom(from, to, amount)
-;   0x05: allowance(owner, spender)
-;   0x06: mint(to, amount)
-;   0x07: burn(amount)
-;   0x08: name()
-;   0x09: symbol()
-;   0x0A: decimals()
-;
+; Storage layout:
+;   Slot 0: total supply
+;   Slot 1: owner
+;   Slot 2: name (up to 8 ASCII chars encoded as u64)
+;   Slot 3: symbol (up to 8 ASCII chars encoded as u64)
+;   Slot 4: decimals
+;   balance[address]   = address XOR 0x1000000000000000
+;   allowance[a][b]    = a XOR b XOR 0x2000000000000000
 ;=============================================================================
 
 .entry main
 
-;=============================================================================
-; MAIN DISPATCHER
-;=============================================================================
-
 main:
-    ; Get function selector from calldata (first 8 bytes loaded to memory)
-    LOADI R15, 0                 ; memory offset 0
-    LOAD64 R0, R15               ; load function ID from calldata into R0
+    LOADI R15, 0
+    LOAD64 R0, R15
 
-    ; Route to appropriate function based on function ID
-    ; Total supply
     LOADI R1, 0
     EQ R2, R0, R1
     LOADI R3, func_totalSupply
     JUMPI R2, R3
 
-    ; balanceOf
     LOADI R1, 1
     EQ R2, R0, R1
     LOADI R3, func_balanceOf
     JUMPI R2, R3
 
-    ; transfer
     LOADI R1, 2
     EQ R2, R0, R1
     LOADI R3, func_transfer
     JUMPI R2, R3
 
-    ; approve
     LOADI R1, 3
     EQ R2, R0, R1
     LOADI R3, func_approve
     JUMPI R2, R3
 
-    ; transferFrom
     LOADI R1, 4
     EQ R2, R0, R1
     LOADI R3, func_transferFrom
     JUMPI R2, R3
 
-    ; allowance
     LOADI R1, 5
     EQ R2, R0, R1
     LOADI R3, func_allowance
     JUMPI R2, R3
 
-    ; mint
     LOADI R1, 6
     EQ R2, R0, R1
     LOADI R3, func_mint
     JUMPI R2, R3
 
-    ; burn
     LOADI R1, 7
     EQ R2, R0, R1
     LOADI R3, func_burn
     JUMPI R2, R3
 
-    ; name
     LOADI R1, 8
     EQ R2, R0, R1
     LOADI R3, func_name
     JUMPI R2, R3
 
-    ; symbol
     LOADI R1, 9
     EQ R2, R0, R1
     LOADI R3, func_symbol
     JUMPI R2, R3
 
-    ; decimals
     LOADI R1, 10
     EQ R2, R0, R1
     LOADI R3, func_decimals
     JUMPI R2, R3
 
-    ; Unknown function - revert
+    LOADI R1, 255
+    EQ R2, R0, R1
+    LOADI R3, func_init
+    JUMPI R2, R3
+
     REVERT
 
-;=============================================================================
-; FUNCTION: totalSupply()
-; Returns the total supply from storage slot 0
-;=============================================================================
 func_totalSupply:
-    LOADI R0, 0                  ; Storage slot 0 = total_supply
-    SLOAD R1, R0                 ; Load total_supply into R1
-    LOADI R2, 0                  ; Memory offset 0
-    STORE64 R2, R1               ; Store return value in memory[0]
+    LOADI R0, 0
+    SLOAD R1, R0
+    LOADI R2, 0
+    STORE64 R2, R1
     HALT
 
-;=============================================================================
-; FUNCTION: balanceOf(address)
-; Gets balance of address from storage
-;=============================================================================
 func_balanceOf:
     LOADI R0, 8
-    LOAD64 R1, R0                ; Load address parameter from calldata[8]
-    XOR R3, R1, R1               ; Clear a temp register (XOR with itself = 0)
-    XOR R3, R1, R3               ; R3 = address XOR 0 = address (balance key)
-    SLOAD R4, R3                 ; Load balance from storage
+    LOAD64 R1, R0
+    LOADI R2, 1152921504606846976 ; 0x1000000000000000
+    XOR R3, R1, R2
+    SLOAD R4, R3
     LOADI R5, 0
-    STORE64 R5, R4               ; Store return value
+    STORE64 R5, R4
     HALT
 
-;=============================================================================
-; FUNCTION: transfer(to, amount)
-; Transfer tokens from caller to recipient
-;=============================================================================
 func_transfer:
-    ; Load parameters
-    CALLER R1                    ; R1 = sender (msg.sender)
+    CALLER R1
     LOADI R0, 8
-    LOAD64 R2, R0                ; R2 = to address
+    LOAD64 R2, R0
     LOADI R0, 16
-    LOAD64 R3, R0                ; R3 = amount
+    LOAD64 R3, R0
 
-    ; Validation: amount > 0
     LOADI R4, 0
-    LE R5, R3, R4                ; if amount <= 0, jump to revert
-    LOADI R6, transfer_revert
+    LE R5, R3, R4
+    LOADI R6, revert_transfer
     JUMPI R5, R6
 
-    ; Get sender balance
-    XOR R4, R1, R4               ; R4 = sender XOR 0 = sender (balance key)
-    SLOAD R5, R4                 ; R5 = sender balance
+    LOADI R4, 1152921504606846976
+    XOR R5, R1, R4
+    SLOAD R6, R5
+    LT R7, R6, R3
+    LOADI R8, revert_transfer
+    JUMPI R7, R8
 
-    ; Check balance >= amount
-    LT R6, R5, R3                ; if balance < amount
-    LOADI R7, transfer_revert
-    JUMPI R6, R7
+    SUB R9, R6, R3
+    SSTORE R5, R9
 
-    ; Update sender balance
-    SUB R7, R5, R3               ; R7 = new sender balance
-    SSTORE R4, R7                ; Store updated balance
+    XOR R10, R2, R4
+    SLOAD R11, R10
+    ADD R12, R11, R3
+    SSTORE R10, R12
 
-    ; Update recipient balance
-    XOR R8, R2, R8               ; R8 = recipient XOR 0 = recipient
-    SLOAD R9, R8                 ; R9 = recipient balance
-    ADD R10, R9, R3              ; R10 = new recipient balance
-    SSTORE R8, R10               ; Store updated balance
-
-    ; Return success
-    LOADI R11, 0
-    LOADI R12, 1
-    STORE64 R11, R12
+    LOADI R13, 0
+    LOADI R14, 1
+    STORE64 R13, R14
     HALT
 
-transfer_revert:
-    REVERT
-
-;=============================================================================
-; FUNCTION: approve(spender, amount)
-; Set allowance for spender
-;=============================================================================
 func_approve:
-    CALLER R1                    ; R1 = owner (msg.sender)
+    CALLER R1
     LOADI R0, 8
-    LOAD64 R2, R0                ; R2 = spender
+    LOAD64 R2, R0
     LOADI R0, 16
-    LOAD64 R3, R0                ; R3 = amount
+    LOAD64 R3, R0
 
-    ; Compute storage key: owner XOR (spender XOR 1)
-    LOADI R4, 1                  ; R4 = 1
-    XOR R5, R2, R4               ; R5 = spender XOR 1
-    XOR R6, R1, R5               ; R6 = owner XOR (spender XOR 1)
-
-    ; Store allowance
+    LOADI R4, 2305843009213693952 ; 0x2000000000000000
+    XOR R5, R1, R2
+    XOR R6, R5, R4
     SSTORE R6, R3
 
-    ; Return success
     LOADI R7, 0
     LOADI R8, 1
     STORE64 R7, R8
     HALT
 
-;=============================================================================
-; FUNCTION: transferFrom(from, to, amount)
-; Transfer using allowance
-;=============================================================================
 func_transferFrom:
-    CALLER R1                    ; R1 = spender
+    CALLER R1
     LOADI R0, 8
-    LOAD64 R2, R0                ; R2 = from
+    LOAD64 R2, R0
     LOADI R0, 16
-    LOAD64 R3, R0                ; R3 = to
+    LOAD64 R3, R0
     LOADI R0, 24
-    LOAD64 R4, R0                ; R4 = amount
+    LOAD64 R4, R0
 
-    ; Check amount > 0
     LOADI R5, 0
     LE R6, R4, R5
-    LOADI R7, transferFrom_revert
+    LOADI R7, revert_transfer_from
     JUMPI R6, R7
 
-    ; Check allowance
-    LOADI R5, 1
-    XOR R6, R1, R5               ; R6 = spender XOR 1
-    XOR R7, R2, R6               ; R7 = from XOR (spender XOR 1)
-    SLOAD R8, R7                 ; R8 = allowance
+    LOADI R5, 2305843009213693952
+    XOR R6, R2, R1
+    XOR R7, R6, R5
+    SLOAD R8, R7
     LT R9, R8, R4
-    LOADI R10, transferFrom_revert
+    LOADI R10, revert_transfer_from
     JUMPI R9, R10
 
-    ; Check from balance
-    XOR R10, R2, R10             ; R10 = from balance key
-    SLOAD R11, R10               ; R11 = from balance
+    LOADI R5, 1152921504606846976
+    XOR R10, R2, R5
+    SLOAD R11, R10
     LT R12, R11, R4
-    LOADI R13, transferFrom_revert
+    LOADI R13, revert_transfer_from
     JUMPI R12, R13
 
-    ; Update allowance
     SUB R13, R8, R4
     SSTORE R7, R13
 
-    ; Update from balance
     SUB R14, R11, R4
     SSTORE R10, R14
 
-    ; Update to balance
-    XOR R15, R3, R15             ; R15 = to balance key
+    XOR R15, R3, R5
     SLOAD R0, R15
     ADD R1, R0, R4
     SSTORE R15, R1
 
-    ; Return success
     LOADI R2, 0
     LOADI R3, 1
     STORE64 R2, R3
     HALT
 
-transferFrom_revert:
-    REVERT
-
-;=============================================================================
-; FUNCTION: allowance(owner, spender)
-; Return approved amount
-;=============================================================================
 func_allowance:
     LOADI R0, 8
-    LOAD64 R1, R0                ; R1 = owner
+    LOAD64 R1, R0
     LOADI R0, 16
-    LOAD64 R2, R0                ; R2 = spender
-
-    ; Compute key
-    LOADI R3, 1
-    XOR R4, R2, R3
-    XOR R5, R1, R4
-
+    LOAD64 R2, R0
+    LOADI R3, 2305843009213693952
+    XOR R4, R1, R2
+    XOR R5, R4, R3
     SLOAD R6, R5
     LOADI R7, 0
     STORE64 R7, R6
     HALT
 
-;=============================================================================
-; FUNCTION: mint(to, amount)
-; Create new tokens (owner only)
-;=============================================================================
 func_mint:
-    ; Check caller is owner
     CALLER R1
-    LOADI R2, 1                  ; Storage slot 1 = owner
+    LOADI R2, 1
     SLOAD R3, R2
     NE R4, R1, R3
-    LOADI R5, mint_revert
+    LOADI R5, revert_mint
     JUMPI R4, R5
 
-    ; Get parameters
     LOADI R0, 8
-    LOAD64 R2, R0                ; R2 = to
+    LOAD64 R2, R0
     LOADI R0, 16
-    LOAD64 R5, R0                ; R5 = amount
+    LOAD64 R5, R0
 
-    ; Check amount > 0
     LOADI R6, 0
     LE R7, R5, R6
-    LOADI R8, mint_revert
+    LOADI R8, revert_mint
     JUMPI R7, R8
 
-    ; Update total supply
     LOADI R0, 0
     SLOAD R7, R0
     ADD R8, R7, R5
     SSTORE R0, R8
 
-    ; Update recipient balance
-    XOR R9, R2, R9               ; R9 = to balance key
-    SLOAD R10, R9
-    ADD R11, R10, R5
-    SSTORE R9, R11
+    LOADI R9, 1152921504606846976
+    XOR R10, R2, R9
+    SLOAD R11, R10
+    ADD R12, R11, R5
+    SSTORE R10, R12
 
-    ; Return success
-    LOADI R12, 0
-    LOADI R13, 1
-    STORE64 R12, R13
+    LOADI R13, 0
+    LOADI R14, 1
+    STORE64 R13, R14
     HALT
 
-mint_revert:
-    REVERT
-
-;=============================================================================
-; FUNCTION: burn(amount)
-; Destroy tokens
-;=============================================================================
 func_burn:
-    CALLER R1                    ; R1 = caller
+    CALLER R1
     LOADI R0, 8
-    LOAD64 R2, R0                ; R2 = amount
+    LOAD64 R2, R0
 
-    ; Check amount > 0
     LOADI R3, 0
     LE R4, R2, R3
-    LOADI R5, burn_revert
+    LOADI R5, revert_burn
     JUMPI R4, R5
 
-    ; Check balance
-    XOR R5, R1, R5               ; R5 = balance key
-    SLOAD R6, R5
-    LT R7, R6, R2
-    LOADI R8, burn_revert
-    JUMPI R7, R8
+    LOADI R6, 1152921504606846976
+    XOR R7, R1, R6
+    SLOAD R8, R7
+    LT R9, R8, R2
+    LOADI R10, revert_burn
+    JUMPI R9, R10
 
-    ; Update balance
-    SUB R8, R6, R2
-    SSTORE R5, R8
+    SUB R11, R8, R2
+    SSTORE R7, R11
 
-    ; Update total supply
-    LOADI R0, 0
-    SLOAD R9, R0
-    SUB R10, R9, R2
-    SSTORE R0, R10
+    LOADI R12, 0
+    SLOAD R13, R12
+    SUB R14, R13, R2
+    SSTORE R12, R14
 
-    ; Return success
-    LOADI R11, 0
-    LOADI R12, 1
-    STORE64 R11, R12
+    LOADI R15, 0
+    LOADI R0, 1
+    STORE64 R15, R0
     HALT
 
-burn_revert:
+func_name:
+    LOADI R0, 2
+    SLOAD R1, R0
+    LOADI R2, 0
+    STORE64 R2, R1
+    HALT
+
+func_symbol:
+    LOADI R0, 3
+    SLOAD R1, R0
+    LOADI R2, 0
+    STORE64 R2, R1
+    HALT
+
+func_decimals:
+    LOADI R0, 4
+    SLOAD R1, R0
+    LOADI R2, 0
+    STORE64 R2, R1
+    HALT
+
+func_init:
+    LOADI R0, 1
+    SLOAD R1, R0
+    LOADI R2, 0
+    NE R3, R1, R2
+    LOADI R4, revert_init
+    JUMPI R3, R4
+
+    LOADI R5, 8
+    LOAD64 R6, R5              ; owner
+    LOADI R5, 16
+    LOAD64 R7, R5              ; name
+    LOADI R5, 24
+    LOAD64 R8, R5              ; symbol
+    LOADI R5, 32
+    LOAD64 R9, R5              ; decimals
+    LOADI R5, 40
+    LOAD64 R10, R5             ; initial recipient
+    LOADI R5, 48
+    LOAD64 R11, R5             ; initial supply
+
+    LOADI R0, 1
+    SSTORE R0, R6
+    LOADI R0, 2
+    SSTORE R0, R7
+    LOADI R0, 3
+    SSTORE R0, R8
+    LOADI R0, 4
+    SSTORE R0, R9
+
+    LOADI R12, 0
+    LE R13, R11, R12
+    LOADI R14, finish_init
+    JUMPI R13, R14
+
+    LOADI R0, 0
+    SSTORE R0, R11
+    LOADI R15, 1152921504606846976
+    XOR R0, R10, R15
+    SSTORE R0, R11
+
+finish_init:
+    LOADI R1, 0
+    LOADI R2, 1
+    STORE64 R1, R2
+    HALT
+
+revert_transfer:
     REVERT
 
-;=============================================================================
-; FUNCTION: name()
-; Function ID: 0x08
-; Returns: token name (stored in slot 2, encoded as u64)
-; Note: Name is limited to 8 ASCII characters encoded as little-endian u64
-;       Example: "MyToken\0" = 0x007F6B6F54794D (little endian)
-;=============================================================================
-func_name:
-    LOADI R0, 2                  ; Storage slot 2 = name
-    SLOAD R1, R0                 ; Load name
-    LOADI R2, 0
-    STORE64 R2, R1               ; Store return value in memory[0]
-    HALT
+revert_transfer_from:
+    REVERT
 
-;=============================================================================
-; FUNCTION: symbol()
-; Function ID: 0x09
-; Returns: token symbol (stored in slot 3, encoded as u64)
-; Note: Symbol is limited to 8 ASCII characters encoded as little-endian u64
-;       Example: "TKN\0\0\0\0\0" = 0x004E4B54 (little endian)
-;=============================================================================
-func_symbol:
-    LOADI R0, 3                  ; Storage slot 3 = symbol
-    SLOAD R1, R0                 ; Load symbol
-    LOADI R2, 0
-    STORE64 R2, R1               ; Store return value in memory[0]
-    HALT
+revert_mint:
+    REVERT
 
-;=============================================================================
-; FUNCTION: decimals()
-; Function ID: 0x0A
-; Returns: number of decimal places (stored in slot 4)
-; Standard value is 18 (matches Ethereum), but can be set to other values
-;=============================================================================
-func_decimals:
-    LOADI R0, 4                  ; Storage slot 4 = decimals
-    SLOAD R1, R0                 ; Load decimals
-    LOADI R2, 0
-    STORE64 R2, R1               ; Store return value in memory[0]
-    HALT
+revert_burn:
+    REVERT
 
-;=============================================================================
-; END OF ERC20 CONTRACT
-;=============================================================================
+revert_init:
+    REVERT

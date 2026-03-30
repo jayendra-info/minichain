@@ -18,11 +18,11 @@ pub struct CallArgs {
     #[arg(short, long, default_value = "./data")]
     data_dir: PathBuf,
 
-    /// Caller keypair alias (@alice) or name (alice)
+    /// Caller keypair alias (@alice)
     #[arg(short, long)]
     from: String,
 
-    /// Contract address (0x…) or alias (@mycontract)
+    /// Contract address (0x...) or alias (@mycontract)
     #[arg(short, long)]
     to: String,
 
@@ -30,9 +30,17 @@ pub struct CallArgs {
     #[arg(long, default_value = "")]
     data: String,
 
-    /// Amount to send (optional)
+    /// Execute as a read-only local query instead of submitting a transaction
+    #[arg(long)]
+    query: bool,
+
+    /// Amount to send with the call
     #[arg(short, long, default_value = "0")]
     amount: u64,
+
+    /// Maximum gas to use
+    #[arg(long, default_value = "250000")]
+    gas_limit: u64,
 
     /// Gas price
     #[arg(long, default_value = "1")]
@@ -57,24 +65,9 @@ pub fn run(args: CallArgs) -> Result<()> {
         hex::decode(&args.data).with_context(|| format!("Invalid calldata hex: {}", args.data))?
     };
 
-    // Open storage and get nonce
+    // Open storage and inspect the target account
     let storage = Storage::open(&args.data_dir).with_context(|| "Failed to open storage")?;
-
     let state = minichain_storage::StateManager::new(&storage);
-    let state_nonce = state.get_nonce(&from)?;
-    let balance = state.get_balance(&from)?;
-
-    // Load blockchain to get mempool state for correct nonce calculation
-    let config = minichain_chain::BlockchainConfig::default();
-    let blockchain = minichain_chain::Blockchain::new(&storage, config);
-    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
-    let pending_from_sender: Vec<_> = pending_txs
-        .into_iter()
-        .filter(|tx| tx.from == from)
-        .collect();
-    let nonce = state_nonce + pending_from_sender.len() as u64;
-
-    // Check if target is a contract
     let target_account = state.get_account(&to)?;
     if !target_account.is_contract() {
         anyhow::bail!("Address {} is not a contract", to.to_hex());
@@ -83,25 +76,59 @@ pub fn run(args: CallArgs) -> Result<()> {
     println!("  Caller:    {}", from.to_hex().bright_yellow());
     println!("  Contract:  {}", to.to_hex().bright_yellow());
     println!("  Amount:    {}", args.amount.to_string().bright_cyan());
+    println!("  Gas Limit: {}", args.gas_limit.to_string().bright_black());
     println!(
         "  Data:      {} bytes",
         data.len().to_string().bright_black()
     );
-    println!("  Nonce:     {}", nonce.to_string().bright_black());
-    println!("  Balance: {} MIC", balance.to_string().bright_black());
     println!();
 
-    // Check balance
-    let gas_limit = 21_000 + (data.len() as u64 * 68) + 2_100; // base + calldata + call
-    let total_cost = args.amount + (gas_limit * args.gas_price);
+    let config = load_config(&args.data_dir)?;
 
+    if args.query {
+        // Query mode executes immediately against current state and prints return data.
+        let blockchain = Blockchain::new(&storage, config);
+        let result = blockchain.query_contract(&to, from, &data, args.amount, args.gas_limit)?;
+        if !result.success {
+            anyhow::bail!(
+                "Query failed: {}",
+                result
+                    .error
+                    .unwrap_or_else(|| "unknown execution failure".to_string())
+            );
+        }
+
+        println!("{}  Query executed", "✓".green().bold());
+        println!("  Gas Used: {}", result.gas_used.to_string().bright_cyan());
+        println!("  Result: 0x{}", hex::encode(result.return_data));
+        println!();
+        return Ok(());
+    }
+
+    // Transaction mode uses state + mempool to derive the next nonce.
+    let state_nonce = state.get_nonce(&from)?;
+    let balance = state.get_balance(&from)?;
+    let blockchain = Blockchain::new(&storage, config.clone());
+    let pending_txs = blockchain.get_pending_transactions(usize::MAX);
+    let pending_from_sender: Vec<_> = pending_txs
+        .into_iter()
+        .filter(|tx| tx.from == from)
+        .collect();
+    let nonce = state_nonce + pending_from_sender.len() as u64;
+
+    println!("  Nonce:     {}", nonce.to_string().bright_black());
+    println!("  Balance:   {} MIC", balance.to_string().bright_black());
+    println!();
+
+    // Check balance against the requested call value plus max gas spend.
+    let total_cost = args.amount + (args.gas_limit * args.gas_price);
     if balance < total_cost {
         anyhow::bail!(
-            "Insufficient balance: have {}, need {} (amount {} + estimated gas {})",
+            "Insufficient balance: have {}, need {} (amount {} + max gas {})",
             balance,
             total_cost,
             args.amount,
-            gas_limit * args.gas_price
+            args.gas_limit * args.gas_price
         );
     }
 
@@ -112,7 +139,7 @@ pub fn run(args: CallArgs) -> Result<()> {
         data,
         args.amount,
         nonce,
-        gas_limit,
+        args.gas_limit,
         args.gas_price,
     )
     .signed(&keypair);
@@ -123,7 +150,6 @@ pub fn run(args: CallArgs) -> Result<()> {
     println!();
 
     // Load config and create blockchain
-    let config = load_config(&args.data_dir)?;
     let mut blockchain = Blockchain::new(&storage, config);
 
     // Register authorities
@@ -168,7 +194,6 @@ fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
         .collect::<Result<Vec<_>>>()?;
 
     let block_time = json.get("block_time").and_then(|v| v.as_u64()).unwrap_or(5);
-
     let max_block_size = json
         .get("max_block_size")
         .and_then(|v| v.as_u64())
@@ -207,7 +232,6 @@ fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<
 
             let address = Address::from_hex(address_hex)?;
             let pubkey_bytes = hex::decode(pubkey_hex)?;
-
             if pubkey_bytes.len() != 32 {
                 continue;
             }
@@ -219,7 +243,6 @@ fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<
             let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_arr)
                 .context("Invalid public key")?;
             let public_key = minichain_core::PublicKey(verifying_key);
-
             blockchain.register_authority(address, public_key);
         }
     }

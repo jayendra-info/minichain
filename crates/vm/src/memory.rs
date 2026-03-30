@@ -104,6 +104,29 @@ impl Memory {
         Ok(())
     }
 
+    pub fn store_bytes(&mut self, offset: u32, bytes: &[u8]) -> Result<(), VmError> {
+        let offset = offset as usize;
+        let end = offset + bytes.len();
+        if end > self.max_size {
+            return Err(VmError::MemoryOverflow);
+        }
+        if end > self.data.len() {
+            self.data.resize(end, 0);
+        }
+        self.data[offset..end].copy_from_slice(bytes);
+        Ok(())
+    }
+
+    pub fn read_range(&self, offset: u32, len: u32) -> Vec<u8> {
+        let offset = offset as usize;
+        let len = len as usize;
+        if offset >= self.data.len() {
+            return Vec::new();
+        }
+        let end = (offset + len).min(self.data.len());
+        self.data[offset..end].to_vec()
+    }
+
     pub fn size(&self) -> usize {
         self.data.len()
     }

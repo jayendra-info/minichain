@@ -41,7 +41,7 @@ pub struct ExecutionResult {
 }
 
 /// The virtual machine state.
-pub struct Vm {
+pub struct Vm<'a> {
     registers: Registers,
     memory: Memory,
     pc: usize,
@@ -57,13 +57,13 @@ pub struct Vm {
     timestamp: u64,
 
     // Storage backend
-    storage: Option<Box<dyn StorageBackend>>,
+    storage: Option<Box<dyn StorageBackend + 'a>>,
 
     // Outputs
     logs: Vec<u64>,
 }
 
-impl Vm {
+impl<'a> Vm<'a> {
     /// Create a new VM with the given bytecode and gas limit.
     pub fn new(
         bytecode: Vec<u8>,
@@ -117,8 +117,13 @@ impl Vm {
     }
 
     /// Set the storage backend.
-    pub fn set_storage(&mut self, storage: Box<dyn StorageBackend>) {
+    pub fn set_storage(&mut self, storage: Box<dyn StorageBackend + 'a>) {
         self.storage = Some(storage);
+    }
+
+    /// Preload calldata or other input bytes into memory at the given offset.
+    pub fn load_memory(&mut self, offset: u32, bytes: &[u8]) -> Result<(), VmError> {
+        self.memory.store_bytes(offset, bytes)
     }
 
     /// Set the block context.
@@ -143,10 +148,11 @@ impl Vm {
             self.step()?;
         }
 
+        let return_len = self.memory.size().min(8) as u32;
         Ok(ExecutionResult {
             success: self.halted, // HALT = success, out of bounds = failure
             gas_used: self.gas.used(),
-            return_data: Vec::new(), // TODO: implement return data
+            return_data: self.memory.read_range(0, return_len),
             logs: std::mem::take(&mut self.logs),
         })
     }
@@ -563,7 +569,7 @@ pub trait StorageBackend {
     fn sstore(&mut self, key: &[u8; 32], value: &[u8; 32]);
 }
 
-impl Vm {
+impl Vm<'_> {
     /// Execute SLOAD: read from persistent storage.
     fn execute_sload(&mut self) -> Result<(), VmError> {
         self.gas.consume(GasCosts::SLOAD)?;
