@@ -7,11 +7,11 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## Overview
 
-The **English Auction** contract (`contracts/auction.asm`) implements an ascending-price auction on the Minichain VM. Bidders compete by placing ever-higher bids; when the timer expires the highest bidder wins and the seller can withdraw the proceeds.
+The **English Auction** contract (`contracts/auction/src/auction.asm`) implements an ascending-price auction on the Minichain VM. Bidders compete by placing ever-higher bids; when the timer expires the highest bidder wins and the seller can withdraw the proceeds.
 
 | Property | Value |
 |---|---|
-| Source | `contracts/auction.asm` |
+| Source | `contracts/auction/src/auction.asm` |
 | Compiled size | ~726 bytes |
 | Storage slots | 7 fixed + 1 per bidder |
 | Gas (init) | < 500 000 |
@@ -182,16 +182,16 @@ These values are hard-coded in the assembly source and can be modified before de
 <TabItem label="Deploy">
 ```bash
 # Alice deploys the auction contract
-minichain deploy --from alice --source contracts/auction.asm --gas-limit 500000
+minichain deploy --from @alice --source contracts/auction/src/auction.asm --gas-limit 500000
 ```
 </TabItem>
 <TabItem label="Bid">
 ```bash
 # Bob bids 150
-minichain call --from bob --to AUCTION_ADDR --amount 150
+minichain call --from @bob --to AUCTION_ADDR --amount 150
 
 # Charlie outbids with 250
-minichain call --from charlie --to AUCTION_ADDR --amount 250
+minichain call --from @charlie --to AUCTION_ADDR --amount 250
 
 # Produce a block to execute
 minichain block produce --authority authority_0
@@ -200,10 +200,10 @@ minichain block produce --authority authority_0
 <TabItem label="Withdraw">
 ```bash
 # Bob withdraws refund (150) after being outbid
-minichain call --from bob --to AUCTION_ADDR --amount 0
+minichain call --from @bob --to AUCTION_ADDR --amount 0
 
 # After auction ends, Alice (seller) claims proceeds
-minichain call --from alice --to AUCTION_ADDR --amount 0
+minichain call --from @alice --to AUCTION_ADDR --amount 0
 ```
 </TabItem>
 </Tabs>

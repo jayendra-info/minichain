@@ -281,7 +281,7 @@ The documentation covers the implementation in 6 comprehensive chapters:
 6. **Chapter 6: CLI** - Command-line interface usage guide
 
 Additional appendix documentation includes:
-- **English Auction Smart Contract** - Full walkthrough of `contracts/auction.asm` with storage layout, dispatch logic, CLI usage, and integration tests.
+- **English Auction Smart Contract** - Full walkthrough of `contracts/auction/src/auction.asm` with storage layout, dispatch logic, CLI usage, and integration tests.
 
 Each chapter includes:
 - Conceptual explanations with analogies

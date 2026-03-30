@@ -46,8 +46,16 @@ jobs:
       - name: Run all tests
         run: cargo test --verbose --workspace
 
-  erc20-e2e:
+  contract-e2e:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        contract:
+          - name: ERC20
+            path: contracts/erc20
+          - name: Auction
+            path: contracts/auction
 
     steps:
       - uses: actions/checkout@v6
@@ -57,6 +65,9 @@ jobs:
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
+
+      - name: Install Bun workspace dependencies
+        run: bun install --frozen-lockfile
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -69,9 +80,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build release CLI for ERC20 E2E
+      - name: Build release CLI for contract E2E
         run: cargo build --release -p minichain-cli --verbose
 
-      - name: Run ERC20 contract E2E tests
-        working-directory: contracts/erc20
+      - name: Run ${{ matrix.contract.name }} contract E2E tests
+        working-directory: ${{ matrix.contract.path }}
         run: bun test

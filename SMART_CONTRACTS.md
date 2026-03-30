@@ -332,29 +332,29 @@ Finalized (funds withdrawn)
 
 ```bash
 # Alice auctions an NFT (conceptual), 1 hour duration
-minichain deploy --from @alice --source auction.asm --gas-limit 150000
+minichain deploy --from @alice --source contracts/auction/src/auction.asm --gas-limit 150000
 
 # Bob bids 100
 minichain call --from @bob --to AUCTION --amount 100
 minichain block produce --authority @authority_0
 
-# Charlie bids 150 (Bob gets 100 back automatically)
+# Charlie bids 150 (Bob gets 100 credited to pending returns)
 minichain call --from @charlie --to AUCTION --amount 150
 minichain block produce --authority @authority_0
 
-# Dave bids 200 (Charlie gets 150 back)
+# Dave bids 200 (Charlie gets 150 credited to pending returns)
 minichain call --from @dave --to AUCTION --amount 200
 minichain block produce --authority @authority_0
 
 # Wait for auction end...
 # (time passes beyond end_time)
 
-# Anyone can call end auction
-minichain call --from @anyone --to AUCTION --data <end_auction>
+# Any zero-value call after end_time triggers auto-finalization
+minichain call --from @alice --to AUCTION --amount 0
 minichain block produce --authority @authority_0
 
 # Alice (seller) withdraws 200
-minichain call --from @alice --to AUCTION --data <seller_withdraw>
+minichain call --from @alice --to AUCTION --amount 0
 ```
 
 ### Use Cases
