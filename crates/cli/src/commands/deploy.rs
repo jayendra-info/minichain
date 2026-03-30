@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
 use minichain_assembler::assemble;
-use minichain_chain::{Blockchain, BlockchainConfig};
+use minichain_chain::{encode_deployment_payload, Blockchain, BlockchainConfig};
 use minichain_consensus::PoAConfig;
 use minichain_core::{Address, Transaction};
 use minichain_storage::Storage;
@@ -19,7 +19,7 @@ pub struct DeployArgs {
     #[arg(short, long, default_value = "./data")]
     data_dir: PathBuf,
 
-    /// Deployer keypair alias (@alice) or name (alice)
+    /// Deployer keypair alias (@alice)
     #[arg(short, long)]
     from: String,
 
@@ -27,11 +27,15 @@ pub struct DeployArgs {
     #[arg(short, long)]
     source: PathBuf,
 
+    /// Optional init calldata to run immediately after deployment (hex)
+    #[arg(long, default_value = "")]
+    init_data: String,
+
     /// Gas price
     #[arg(long, default_value = "1")]
     gas_price: u64,
 
-    /// Maximum gas to spend (safety cap)
+    /// Maximum gas to spend
     #[arg(long)]
     gas_limit: u64,
 }
@@ -50,12 +54,26 @@ pub fn run(args: DeployArgs) -> Result<()> {
     );
 
     let bytecode = assemble(&source_code).with_context(|| "Failed to compile assembly code")?;
+    let init_data = if args.init_data.is_empty() {
+        Vec::new()
+    } else {
+        hex::decode(&args.init_data)
+            .with_context(|| format!("Invalid init calldata hex: {}", args.init_data))?
+    };
+    let payload = encode_deployment_payload(&bytecode, &init_data);
 
     println!(
         "{}  Compiled to {} bytes",
         "✓".green().bold(),
         bytecode.len()
     );
+    if !init_data.is_empty() {
+        println!(
+            "{}  Init calldata: {} bytes",
+            "✓".green().bold(),
+            init_data.len()
+        );
+    }
     println!();
 
     // Load deployer keypair
@@ -64,7 +82,6 @@ pub fn run(args: DeployArgs) -> Result<()> {
 
     // Open storage and get nonce
     let storage = Storage::open(&args.data_dir).with_context(|| "Failed to open storage")?;
-
     let state = minichain_storage::StateManager::new(&storage);
     let state_nonce = state.get_nonce(&from)?;
     let balance = state.get_balance(&from)?;
@@ -81,24 +98,22 @@ pub fn run(args: DeployArgs) -> Result<()> {
 
     println!("  Deployer:  {}", from.to_hex().bright_yellow());
     println!("  Nonce:     {}", nonce.to_string().bright_black());
-    println!("  Balance: {} MIC", balance.to_string().bright_black());
+    println!("  Balance:   {} MIC", balance.to_string().bright_black());
+    println!("  Gas Limit: {}", args.gas_limit.to_string().bright_black());
     println!();
 
-    // Calculate gas needed for deployment
-    let gas_required = 21_000 + (bytecode.len() as u64 * 200);
-
-    // Check gas limit is sufficient
-    if gas_required > args.gas_limit {
+    // Check gas limit is sufficient for code storage cost before init execution.
+    let min_gas_required = 32_000 + (bytecode.len() as u64 * 200);
+    if min_gas_required > args.gas_limit {
         anyhow::bail!(
-            "Gas limit too low: required {}, got {}",
-            gas_required,
+            "Gas limit too low: required at least {}, got {}",
+            min_gas_required,
             args.gas_limit
         );
     }
 
     // Check balance (max cost based on user's gas limit)
     let total_cost = args.gas_limit * args.gas_price;
-
     if balance < total_cost {
         anyhow::bail!(
             "Insufficient balance: have {}, need {} (estimated)",
@@ -107,9 +122,9 @@ pub fn run(args: DeployArgs) -> Result<()> {
         );
     }
 
-    // Create and sign deploy transaction (uses calculated gas, not limit)
-    let tx = Transaction::deploy(from, bytecode.clone(), nonce, gas_required, args.gas_price)
-        .signed(&keypair);
+    // Create and sign deploy transaction
+    let tx =
+        Transaction::deploy(from, payload, nonce, args.gas_limit, args.gas_price).signed(&keypair);
     let tx_hash = tx.hash();
 
     // Calculate contract address
@@ -171,7 +186,6 @@ fn load_config(data_dir: &Path) -> Result<BlockchainConfig> {
         .collect::<Result<Vec<_>>>()?;
 
     let block_time = json.get("block_time").and_then(|v| v.as_u64()).unwrap_or(5);
-
     let max_block_size = json
         .get("max_block_size")
         .and_then(|v| v.as_u64())
@@ -210,7 +224,6 @@ fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<
 
             let address = Address::from_hex(address_hex)?;
             let pubkey_bytes = hex::decode(pubkey_hex)?;
-
             if pubkey_bytes.len() != 32 {
                 continue;
             }
@@ -222,7 +235,6 @@ fn register_authorities(blockchain: &mut Blockchain, data_dir: &Path) -> Result<
             let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_arr)
                 .context("Invalid public key")?;
             let public_key = minichain_core::PublicKey(verifying_key);
-
             blockchain.register_authority(address, public_key);
         }
     }

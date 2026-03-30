@@ -225,6 +225,7 @@ impl BlockProposer {
         prev_hash: minichain_core::Hash,
         transactions: Vec<minichain_core::Transaction>,
         state_root: minichain_core::Hash,
+        timestamp: u64,
     ) -> Result<Block> {
         // Verify it's our turn
         if !self.can_propose_at_height(height)? {
@@ -236,8 +237,9 @@ impl BlockProposer {
         }
 
         // Create and sign the block
-        let block = Block::new(height, prev_hash, transactions, state_root, self.address())
-            .signed(&self.keypair);
+        let mut block = Block::new(height, prev_hash, transactions, state_root, self.address());
+        block.header.timestamp = timestamp;
+        let block = block.signed(&self.keypair);
 
         Ok(block)
     }
@@ -363,6 +365,7 @@ mod tests {
                 minichain_core::Hash::ZERO,
                 vec![],
                 minichain_core::Hash::ZERO,
+                1,
             )
             .unwrap();
         assert_eq!(block.header.author, addr1);
@@ -375,6 +378,7 @@ mod tests {
             minichain_core::Hash::ZERO,
             vec![],
             minichain_core::Hash::ZERO,
+            1,
         );
         assert!(matches!(result, Err(ConsensusError::NotTurn { .. })));
     }

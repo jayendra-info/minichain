@@ -13,3 +13,6 @@ minichain-storage.workspace = true
 minichain-consensus.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
+
+[dev-dependencies]
+minichain-assembler.workspace = true

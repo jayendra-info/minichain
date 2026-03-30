@@ -29,6 +29,7 @@
 //!     Hash::ZERO,
 //!     vec![],
 //!     Hash::ZERO,
+//!     1,
 //! ).unwrap();
 //!
 //! // Verify the block

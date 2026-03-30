@@ -748,6 +748,7 @@ name = "minichain-chain"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "minichain-assembler",
  "minichain-consensus",
  "minichain-core",
  "minichain-storage",
