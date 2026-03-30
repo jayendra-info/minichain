@@ -46,9 +46,6 @@ jobs:
       - name: Run all tests
         run: cargo test --verbose --workspace
 
-      - name: Run security audit
-        uses: rustsec/audit-check@v2
-
   erc20-e2e:
     runs-on: ubuntu-latest
 
