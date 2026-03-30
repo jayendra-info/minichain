@@ -25,7 +25,7 @@ ALICE_ADDR=$(echo "$ACCOUNT_OUTPUT" | grep "Address:" | awk '{print $2}')
 echo "  Alice address: $ALICE_ADDR"
 echo
 
-echo "Step 3: Mint tokens to alice"
+echo "Step 3: Mint Mini Coins to alice"
 $MINICHAIN account mint --from @authority_0 --to "$ALICE_ADDR" --amount 1000000 --data-dir "$TEST_DIR/data"
 echo
 

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct Account {
     /// Transaction count / sequence number.
     pub nonce: u64,
-    /// Account balance in the native token.
+    /// Account balance in the Mini Coin.
     pub balance: u64,
     /// Hash of the contract bytecode (None for EOAs).
     pub code_hash: Option<Hash>,

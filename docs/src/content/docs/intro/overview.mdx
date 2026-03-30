@@ -66,7 +66,7 @@ We use an **account-based model** (like Ethereum) rather than UTXO (like Bitcoin
 ```rust
 pub struct Account {
     pub nonce: u64,           // Transaction count
-    pub balance: u64,         // Native token balance
+    pub balance: u64,         // Balance in MIC (Mini Coin)
     pub code_hash: Option<Hash>,  // Contract bytecode hash
     pub storage_root: Hash,   // Storage trie root
 }
@@ -76,6 +76,33 @@ pub struct Account {
 - Simpler mental model
 - Easier smart contract state
 - Natural fit for our VM
+
+## Native Token: Mini Coin (MIC)
+
+Minichain has a native cryptocurrency called **Mini Coin** with the symbol **MIC**. It serves multiple purposes:
+
+- **Transaction fees** — MIC is used to pay for gas when executing transactions and deploying/calling contracts
+- **Account funding** — Initial MIC is minted by authorities for testing purposes
+- **Value transfer** — MIC can be sent between accounts as a native value
+
+### Token Details
+
+| Property | Value |
+|----------|-------|
+| Name | Mini Coin |
+| Symbol | MIC |
+| Decimals | 0 (whole units only) |
+| Initial Supply | 0 (minted by authorities) |
+
+### Getting MIC
+
+For testing, authorities can mint MIC using the CLI:
+
+```bash
+minichain account mint --from authority_0 --to <ADDRESS> --amount 1000
+```
+
+MIC can also be received through transactions from other accounts.
 
 ## Consensus: Proof of Authority
 

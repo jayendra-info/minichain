@@ -81,7 +81,7 @@ pub fn run(args: DeployArgs) -> Result<()> {
 
     println!("  Deployer:  {}", from.to_hex().bright_yellow());
     println!("  Nonce:     {}", nonce.to_string().bright_black());
-    println!("  Balance:   {}", balance.to_string().bright_black());
+    println!("  Balance: {} MIC", balance.to_string().bright_black());
     println!();
 
     // Calculate gas needed for deployment
