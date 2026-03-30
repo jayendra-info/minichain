@@ -127,10 +127,10 @@ cargo run --release -- account list
 
 ```bash
 # Mint tokens so Alice can pay deployment and call gas
-cargo run --release -- account mint --from authority_0 --to <ALICE_ADDRESS> --amount 50000
+cargo run --release -- account mint --from @authority_0 --to <ALICE_ADDRESS> --amount 50000
 
 # Optional: fund Bob if Bob will send transactions/calls
-cargo run --release -- account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
+cargo run --release -- account mint --from @authority_0 --to <BOB_ADDRESS> --amount 50000
 ```
 
 ### 4. Deploy a Contract
@@ -152,7 +152,7 @@ main:
 Deploy it:
 
 ```bash
-cargo run --release -- deploy --from alice --source counter.asm --gas-limit 80000
+cargo run --release -- deploy --from @alice --source counter.asm --gas-limit 80000
 
 # Output:
 # Deploying contract...
@@ -165,7 +165,7 @@ cargo run --release -- deploy --from alice --source counter.asm --gas-limit 8000
 ### 5. Produce a Block
 
 ```bash
-cargo run --release -- block produce --authority authority_0
+cargo run --release -- block produce --authority @authority_0
 
 # Output:
 # Producing new block...
@@ -179,10 +179,10 @@ cargo run --release -- block produce --authority authority_0
 ### 6. Call the Contract
 
 ```bash
-cargo run --release -- call --from alice --to 0xa7b3c9e5d1f4a8c2...
+cargo run --release -- call --from @alice --to 0xa7b3c9e5d1f4a8c2...
 
 # Produce another block
-cargo run --release -- block produce --authority authority_0
+cargo run --release -- block produce --authority @authority_0
 ```
 
 ### 7. Explore the Chain
@@ -204,16 +204,16 @@ cargo run --release -- account balance 0x3f8c2a6e9b5d1f4a...
 |---------|-------------|---------|
 | `init` | Initialize new blockchain | `minichain init --authorities 2` |
 | `account new` | Generate keypair | `minichain account new --name alice` |
-| `account mint` | Mint tokens (authority only) | `minichain account mint --from authority_0 --to 0xABC... --amount 50000` |
+| `account mint` | Mint tokens (authority only) | `minichain account mint --from @authority_0 --to 0xABC... --amount 50000` |
 | `account balance` | Query balance | `minichain account balance 0xABC...` |
 | `account info` | Show account details | `minichain account info 0xABC...` |
 | `account list` | List all keypairs | `minichain account list` |
-| `tx send` | Send transfer | `minichain tx send --from alice --to 0xABC... --amount 100` |
+| `tx send` | Send transfer | `minichain tx send --from @alice --to 0xABC... --amount 100` |
 | `block list` | List recent blocks | `minichain block list --count 10` |
 | `block info` | Show block details | `minichain block info 5` |
-| `block produce` | Produce new block | `minichain block produce --authority authority_0` |
-| `deploy` | Deploy contract | `minichain deploy --from alice --source contract.asm --gas-limit 80000` |
-| `call` | Call contract | `minichain call --from alice --to 0xABC... --data 00` |
+| `block produce` | Produce new block | `minichain block produce --authority @authority_0` |
+| `deploy` | Deploy contract | `minichain deploy --from @alice --source contract.asm --gas-limit 80000` |
+| `call` | Call contract | `minichain call --from @alice --to 0xABC... --data 00` |
 
 Run `minichain --help` or `minichain <command> --help` for detailed usage.
 
@@ -299,8 +299,8 @@ minichain account new --name alice
 minichain account new --name bob
 
 # 3. Fund Alice and Bob with authority key
-minichain account mint --from authority_0 --to <ALICE_ADDRESS> --amount 50000
-minichain account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
+minichain account mint --from @authority_0 --to <ALICE_ADDRESS> --amount 50000
+minichain account mint --from @authority_0 --to <BOB_ADDRESS> --amount 50000
 
 # 4. Create a storage test contract (storage_test.asm)
 # .entry main
@@ -313,17 +313,17 @@ minichain account mint --from authority_0 --to <BOB_ADDRESS> --amount 50000
 #     HALT
 
 # 5. Deploy contract
-minichain deploy --from alice --source storage_test.asm --gas-limit 80000
+minichain deploy --from @alice --source storage_test.asm --gas-limit 80000
 
 # 6. Produce block to include deployment
-minichain block produce --authority authority_0
+minichain block produce --authority @authority_0
 
 # 7. Call contract twice
-minichain call --from alice --to 0xa7b3c9e5d1f4a8c2...
-minichain block produce --authority authority_0
+minichain call --from @alice --to 0xa7b3c9e5d1f4a8c2...
+minichain block produce --authority @authority_0
 
-minichain call --from bob --to 0xa7b3c9e5d1f4a8c2...
-minichain block produce --authority authority_0
+minichain call --from @bob --to 0xa7b3c9e5d1f4a8c2...
+minichain block produce --authority @authority_0
 
 # 8. View blockchain state
 minichain block list

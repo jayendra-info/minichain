@@ -5,10 +5,12 @@ use clap::Args;
 use colored::Colorize;
 use minichain_chain::{Blockchain, BlockchainConfig};
 use minichain_consensus::PoAConfig;
-use minichain_core::{Address, Keypair, Transaction};
+use minichain_core::{Address, Transaction};
 use minichain_storage::Storage;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::alias;
 
 #[derive(Args)]
 pub struct CallArgs {
@@ -16,11 +18,11 @@ pub struct CallArgs {
     #[arg(short, long, default_value = "./data")]
     data_dir: PathBuf,
 
-    /// Caller account (keypair file without .json extension)
+    /// Caller keypair alias (@alice) or name (alice)
     #[arg(short, long)]
     from: String,
 
-    /// Contract address (hex format)
+    /// Contract address (0x…) or alias (@mycontract)
     #[arg(short, long)]
     to: String,
 
@@ -42,13 +44,11 @@ pub fn run(args: CallArgs) -> Result<()> {
     println!();
 
     // Load caller keypair
-    let keys_dir = args.data_dir.join("keys");
-    let keypair = load_keypair(&keys_dir, &args.from)?;
+    let keypair = alias::load_keypair_by_ref(&args.data_dir, &args.from)?;
     let from = keypair.address();
 
     // Parse contract address
-    let to = Address::from_hex(&args.to)
-        .with_context(|| format!("Invalid contract address: {}", args.to))?;
+    let to = alias::resolve_address(&args.data_dir, &args.to)?;
 
     // Parse calldata
     let data = if args.data.is_empty() {
@@ -145,38 +145,6 @@ pub fn run(args: CallArgs) -> Result<()> {
     );
 
     Ok(())
-}
-
-fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
-    let key_file = keys_dir.join(format!("{}.json", name));
-    if !key_file.exists() {
-        anyhow::bail!(
-            "Keypair file not found: {}. Use 'minichain account new' to create one.",
-            key_file.display()
-        );
-    }
-
-    let contents = fs::read_to_string(&key_file)?;
-    let json: serde_json::Value = serde_json::from_str(&contents)?;
-
-    let private_key_hex = json
-        .get("private_key")
-        .and_then(|v| v.as_str())
-        .context("Missing private_key in keypair file")?;
-
-    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
-
-    if private_key_bytes.len() != 32 {
-        anyhow::bail!(
-            "Invalid private key length: expected 32 bytes, got {}",
-            private_key_bytes.len()
-        );
-    }
-
-    let mut private_key = [0u8; 32];
-    private_key.copy_from_slice(&private_key_bytes);
-
-    Keypair::from_private_key(&private_key).context("Failed to create keypair from private key")
 }
 
 // Helper function to load blockchain config
