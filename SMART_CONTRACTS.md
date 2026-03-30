@@ -54,19 +54,19 @@ slot hash(address, hash(spender, 1)): allowances[owner][spender]
 
 ```bash
 # Deploy token contract
-minichain deploy --from alice --source erc20.asm --gas-limit 120000
+minichain deploy --from @alice --source erc20.asm --gas-limit 120000
 
 # Transfer 100 tokens from Alice to Bob
-minichain call --from alice --to TOKEN_ADDR --data <transfer_calldata>
+minichain call --from @alice --to TOKEN_ADDR --data <transfer_calldata>
 
 # Check Bob's balance
-minichain call --from bob --to TOKEN_ADDR --data <balanceOf_calldata>
+minichain call --from @bob --to TOKEN_ADDR --data <balanceOf_calldata>
 
 # Alice approves Bob to spend 50 tokens
-minichain call --from alice --to TOKEN_ADDR --data <approve_calldata>
+minichain call --from @alice --to TOKEN_ADDR --data <approve_calldata>
 
 # Bob transfers 30 tokens from Alice to Charlie (using allowance)
-minichain call --from bob --to TOKEN_ADDR --data <transferFrom_calldata>
+minichain call --from @bob --to TOKEN_ADDR --data <transferFrom_calldata>
 ```
 
 ### Implementation Considerations
@@ -128,16 +128,16 @@ slot hash(proposal_id, hash(signer, 7)): has_signed
 
 ```bash
 # Deploy 2-of-3 multisig (Alice, Bob, Charlie)
-minichain deploy --from alice --source multisig.asm --gas-limit 150000
+minichain deploy --from @alice --source multisig.asm --gas-limit 150000
 
 # Alice submits proposal to send 100 tokens
-minichain call --from alice --to MULTISIG --data <submit_proposal>
+minichain call --from @alice --to MULTISIG --data <submit_proposal>
 
 # Bob signs the proposal
-minichain call --from bob --to MULTISIG --data <sign_proposal>
+minichain call --from @bob --to MULTISIG --data <sign_proposal>
 
 # 2 signatures reached, anyone can execute
-minichain call --from charlie --to MULTISIG --data <execute_proposal>
+minichain call --from @charlie --to MULTISIG --data <execute_proposal>
 
 # Funds sent!
 ```
@@ -222,25 +222,25 @@ Refunded (3) → Buyer withdraws
 ```bash
 # 1. Deploy escrow (buyer=alice, seller=bob, arbiter=charlie)
 # Deadline: 7 days from now
-minichain deploy --from alice --source escrow.asm --gas-limit 120000
+minichain deploy --from @alice --source escrow.asm --gas-limit 120000
 
 # 2. Alice deposits 1000 tokens
-minichain call --from alice --to ESCROW --amount 1000
-minichain block produce --authority authority_0
+minichain call --from @alice --to ESCROW --amount 1000
+minichain block produce --authority @authority_0
 
 # 3. Bob delivers goods (off-chain)
 
 # 4a. Happy path: Charlie releases to Bob
-minichain call --from charlie --to ESCROW --data <release>
-minichain block produce --authority authority_0
+minichain call --from @charlie --to ESCROW --data <release>
+minichain block produce --authority @authority_0
 
 # 4b. OR Dispute: Alice claims non-delivery
-minichain call --from alice --to ESCROW --data <dispute>
+minichain call --from @alice --to ESCROW --data <dispute>
 # Charlie investigates and decides
-minichain call --from charlie --to ESCROW --data <refund>
+minichain call --from @charlie --to ESCROW --data <refund>
 
 # 5. Winner withdraws
-minichain call --from bob --to ESCROW --data <withdraw>
+minichain call --from @bob --to ESCROW --data <withdraw>
 ```
 
 ### Use Cases
@@ -332,29 +332,29 @@ Finalized (funds withdrawn)
 
 ```bash
 # Alice auctions an NFT (conceptual), 1 hour duration
-minichain deploy --from alice --source auction.asm --gas-limit 150000
+minichain deploy --from @alice --source auction.asm --gas-limit 150000
 
 # Bob bids 100
-minichain call --from bob --to AUCTION --amount 100
-minichain block produce --authority authority_0
+minichain call --from @bob --to AUCTION --amount 100
+minichain block produce --authority @authority_0
 
 # Charlie bids 150 (Bob gets 100 back automatically)
-minichain call --from charlie --to AUCTION --amount 150
-minichain block produce --authority authority_0
+minichain call --from @charlie --to AUCTION --amount 150
+minichain block produce --authority @authority_0
 
 # Dave bids 200 (Charlie gets 150 back)
-minichain call --from dave --to AUCTION --amount 200
-minichain block produce --authority authority_0
+minichain call --from @dave --to AUCTION --amount 200
+minichain block produce --authority @authority_0
 
 # Wait for auction end...
 # (time passes beyond end_time)
 
 # Anyone can call end auction
-minichain call --from anyone --to AUCTION --data <end_auction>
-minichain block produce --authority authority_0
+minichain call --from @anyone --to AUCTION --data <end_auction>
+minichain block produce --authority @authority_0
 
 # Alice (seller) withdraws 200
-minichain call --from alice --to AUCTION --data <seller_withdraw>
+minichain call --from @alice --to AUCTION --data <seller_withdraw>
 ```
 
 ### Use Cases
@@ -442,27 +442,27 @@ Executed (if passed)
 
 ```bash
 # Deploy DAO with 50% quorum
-minichain deploy --from alice --source dao.asm --gas-limit 180000
+minichain deploy --from @alice --source dao.asm --gas-limit 180000
 
 # Proposal 1: "Increase block time to 10 seconds"
-minichain call --from alice --to DAO --data <create_proposal>
-minichain block produce --authority authority_0
+minichain call --from @alice --to DAO --data <create_proposal>
+minichain block produce --authority @authority_0
 
 # Members vote (assume Alice=40%, Bob=35%, Charlie=25% of tokens)
-minichain call --from alice --to DAO --data <vote_yes>  # 40% yes
-minichain block produce --authority authority_0
+minichain call --from @alice --to DAO --data <vote_yes>  # 40% yes
+minichain block produce --authority @authority_0
 
-minichain call --from bob --to DAO --data <vote_yes>    # 35% yes
-minichain block produce --authority authority_0
+minichain call --from @bob --to DAO --data <vote_yes>    # 35% yes
+minichain block produce --authority @authority_0
 
-minichain call --from charlie --to DAO --data <vote_no> # 25% no
-minichain block produce --authority authority_0
+minichain call --from @charlie --to DAO --data <vote_no> # 25% no
+minichain block produce --authority @authority_0
 
 # Total: 75% yes, 25% no → Passed (quorum 50% met)
 
 # Anyone can execute after voting period
-minichain call --from anyone --to DAO --data <execute>
-minichain block produce --authority authority_0
+minichain call --from @anyone --to DAO --data <execute>
+minichain block produce --authority @authority_0
 
 # Proposal executed!
 ```

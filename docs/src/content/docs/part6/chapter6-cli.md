@@ -15,10 +15,10 @@ This chapter builds a command-line interface (CLI) that ties everything together
 |---------|---------|---------|
 | `init` | Initialize a new blockchain with genesis block | `minichain init --authorities 2` |
 | `account` | Manage keypairs and query balances | `minichain account new --name alice` |
-| `tx send` | Send value transfer transactions | `minichain tx send --from alice --to bob --amount 100` |
-| `block` | Query and produce blocks | `minichain block produce --authority authority_0` |
-| `deploy` | Compile and deploy contracts | `minichain deploy --from alice --source counter.asm --gas-limit 50000` |
-| `call` | Invoke deployed contracts | `minichain call --from alice --to 0xABC... --data 00` |
+| `tx send` | Send value transfer transactions | `minichain tx send --from @alice --to @bob --amount 100` |
+| `block` | Query and produce blocks | `minichain block produce --authority @authority_0` |
+| `deploy` | Compile and deploy contracts | `minichain deploy --from @alice --source counter.asm --gas-limit 50000` |
+| `call` | Invoke deployed contracts | `minichain call --from @alice --to 0xABC... --data 00` |
 
 ## Why a CLI?
 
@@ -269,8 +269,8 @@ minichain account mint [OPTIONS]
 
 **Options:**
 - `-d, --data-dir <PATH>`: Blockchain data directory (default: `./data`)
-- `-f, --from <NAME>`: Authority keypair name (without `.json`)
-- `-t, --to <ADDRESS>`: Recipient address (hex format)
+- `-f, --from <ALIAS>`: Authority keypair alias (e.g. `@authority_0`)
+- `-t, --to <ADDRESS>`: Recipient address (`0x…`) or alias (`@alice`)
 - `-a, --amount <AMOUNT>`: Amount to mint
 
 **What it does:**
@@ -282,7 +282,7 @@ If `--from` is not an authority keypair, the command fails.
 
 **Example:**
 ```bash
-$ minichain account mint --from authority_0 --to 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a --amount 50000
+$ minichain account mint --from @authority_0 --to 0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a --amount 50000
 
 Minting...
 
@@ -305,8 +305,8 @@ minichain tx send [OPTIONS]
 
 **Options:**
 - `-d, --data-dir <PATH>`: Blockchain data directory (default: `./data`)
-- `-f, --from <NAME>`: Sender keypair name (without `.json`)
-- `-t, --to <ADDRESS>`: Recipient address (hex format)
+- `-f, --from <ALIAS>`: Sender keypair alias (e.g. `@alice`)
+- `-t, --to <ADDRESS>`: Recipient address (`0x…`) or alias (`@bob`)
 - `-a, --amount <AMOUNT>`: Amount to send
 - `--gas-price <PRICE>`: Gas price (default: `1`)
 
@@ -319,7 +319,7 @@ minichain tx send [OPTIONS]
 
 **Example:**
 ```bash
-$ minichain tx send --from alice --to 0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e --amount 100
+$ minichain tx send --from @alice --to 0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e --amount 100
 
 Sending transfer transaction...
 
@@ -416,7 +416,7 @@ minichain block produce [OPTIONS]
 
 **Options:**
 - `-d, --data-dir <PATH>`: Blockchain data directory (default: `./data`)
-- `-a, --authority <NAME>`: Authority keypair name (without `.json`)
+- `-a, --authority <ALIAS>`: Authority keypair alias (e.g. `@authority_0`)
 
 **What it does:**
 1. Loads the authority's keypair
@@ -429,7 +429,7 @@ minichain block produce [OPTIONS]
 
 **Example:**
 ```bash
-$ minichain block produce --authority authority_0
+$ minichain block produce --authority @authority_0
 
 Producing new block...
 
@@ -463,7 +463,7 @@ minichain deploy [OPTIONS]
 
 **Options:**
 - `-d, --data-dir <PATH>`: Blockchain data directory (default: `./data`)
-- `-f, --from <NAME>`: Deployer keypair name (without `.json`)
+- `-f, --from <ALIAS>`: Deployer keypair alias (e.g. `@alice`)
 - `-s, --source <PATH>`: Path to assembly source file
 - `--gas-price <PRICE>`: Gas price (default: `1`)
 - `--gas-limit <LIMIT>`: Maximum gas to spend (required safety cap)
@@ -494,7 +494,7 @@ main:
 
 Deploy it:
 ```bash
-$ minichain deploy --from alice --source counter.asm --gas-limit 50000
+$ minichain deploy --from @alice --source counter.asm --gas-limit 50000
 
 Deploying contract...
 
@@ -541,8 +541,8 @@ minichain call [OPTIONS]
 
 **Options:**
 - `-d, --data-dir <PATH>`: Blockchain data directory (default: `./data`)
-- `-f, --from <NAME>`: Caller keypair name (without `.json`)
-- `-t, --to <ADDRESS>`: Contract address (hex format)
+- `-f, --from <ALIAS>`: Caller keypair alias (e.g. `@alice`)
+- `-t, --to <ADDRESS>`: Contract address (`0x…`) or alias (`@mycontract`)
 - `--data <HEX>`: Calldata (hex format, optional)
 - `-a, --amount <AMOUNT>`: Amount to send (optional, default: `0`)
 - `--gas-price <PRICE>`: Gas price (default: `1`)
@@ -558,7 +558,7 @@ minichain call [OPTIONS]
 **Example:**
 Call the counter contract deployed above:
 ```bash
-$ minichain call --from alice --to 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
+$ minichain call --from @alice --to 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
 
 Calling contract...
 
@@ -580,7 +580,7 @@ Use minichain block produce to produce a block.
 
 With calldata:
 ```bash
-$ minichain call --from alice --to 0xa7b3... --data 00000001
+$ minichain call --from @alice --to 0xa7b3... --data 00000001
 ```
 
 **Gas estimation:**
@@ -638,7 +638,7 @@ Or use a custom genesis block with pre-funded accounts.
 ### Step 4: Send a transfer
 
 ```bash
-$ minichain tx send --from alice --to 0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e --amount 500
+$ minichain tx send --from @alice --to 0x5c9e2b7d4f1a8c3e6b9d5f2a7c4e1b8d3f6a9c2e --amount 500
 
 Sending transfer transaction...
   From:   0x3f8c2a6e9b5d1f4a7c3e8b2d6f9a5c1e4b7d3f8a
@@ -651,7 +651,7 @@ Sending transfer transaction...
 ### Step 5: Produce a block
 
 ```bash
-$ minichain block produce --authority authority_0
+$ minichain block produce --authority @authority_0
 
 Producing new block...
   Authority: 0xf4a5e8c2b9d7f3a1e6c4b8d2f5a9e7c3b6d4f8a2
@@ -693,7 +693,7 @@ main:
 
 Deploy:
 ```bash
-$ minichain deploy --from alice --source storage_test.asm --gas-limit 80000
+$ minichain deploy --from @alice --source storage_test.asm --gas-limit 80000
 
 Deploying contract...
   Compiling: storage_test.asm
@@ -704,7 +704,7 @@ Deploying contract...
 
 Produce a block:
 ```bash
-$ minichain block produce --authority authority_0
+$ minichain block produce --authority @authority_0
 ✓  Block produced (Height: 2, Txs: 1)
 ```
 
@@ -723,16 +723,16 @@ Account Information:
 ### Step 8: Call the contract
 
 ```bash
-$ minichain call --from alice --to 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
+$ minichain call --from @alice --to 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
 ✓  Contract call submitted
 
-$ minichain block produce --authority authority_0
+$ minichain block produce --authority @authority_0
 ✓  Block produced (Height: 3, Txs: 1)
 
-$ minichain call --from bob --to 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
+$ minichain call --from @bob --to 0xa7b3c9e5d1f4a8c2b6d9f3e7a5c1b8d4f2a6e9c7
 ✓  Contract call submitted
 
-$ minichain block produce --authority authority_0
+$ minichain block produce --authority @authority_0
 ✓  Block produced (Height: 4, Txs: 1)
 ```
 
@@ -819,7 +819,7 @@ Common errors and solutions:
 |-------|----------|
 | "Insufficient balance" | Check balance with `account balance`, ensure enough for amount + gas |
 | "Gas limit too low" | Increase `deploy --gas-limit` to at least `21,000 + (bytecode_len * 200)` |
-| "Keypair file not found" | Verify the keypair name (without `.json`) and data directory |
+| "Keypair file not found" | Verify the alias name (e.g. `@alice`) and data directory |
 | "Address is not an authority" | Use correct authority keypair for `block produce` |
 | "Invalid nonce" | Another transaction is pending; wait for block production |
 | "Address is not a contract" | Double-check the contract address; may not be deployed yet |
@@ -840,10 +840,10 @@ minichain init --authorities 1
 minichain account new --name deployer
 
 # Deploy contract
-minichain deploy --from deployer --source contract.asm --gas-limit 80000
+minichain deploy --from @deployer --source contract.asm --gas-limit 80000
 
 # Produce block
-minichain block produce --authority authority_0
+minichain block produce --authority @authority_0
 
 # Check deployment
 CONTRACT_ADDR=$(minichain account list | grep deployer | awk '{print $2}')

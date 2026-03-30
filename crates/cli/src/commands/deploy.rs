@@ -6,10 +6,12 @@ use colored::Colorize;
 use minichain_assembler::assemble;
 use minichain_chain::{Blockchain, BlockchainConfig};
 use minichain_consensus::PoAConfig;
-use minichain_core::{Address, Keypair, Transaction};
+use minichain_core::{Address, Transaction};
 use minichain_storage::Storage;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::alias;
 
 #[derive(Args)]
 pub struct DeployArgs {
@@ -17,7 +19,7 @@ pub struct DeployArgs {
     #[arg(short, long, default_value = "./data")]
     data_dir: PathBuf,
 
-    /// Account to deploy from (keypair file without .json extension)
+    /// Deployer keypair alias (@alice) or name (alice)
     #[arg(short, long)]
     from: String,
 
@@ -57,8 +59,7 @@ pub fn run(args: DeployArgs) -> Result<()> {
     println!();
 
     // Load deployer keypair
-    let keys_dir = args.data_dir.join("keys");
-    let keypair = load_keypair(&keys_dir, &args.from)?;
+    let keypair = alias::load_keypair_by_ref(&args.data_dir, &args.from)?;
     let from = keypair.address();
 
     // Open storage and get nonce
@@ -147,38 +148,6 @@ pub fn run(args: DeployArgs) -> Result<()> {
     );
 
     Ok(())
-}
-
-fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
-    let key_file = keys_dir.join(format!("{}.json", name));
-    if !key_file.exists() {
-        anyhow::bail!(
-            "Keypair file not found: {}. Use 'minichain account new' to create one.",
-            key_file.display()
-        );
-    }
-
-    let contents = fs::read_to_string(&key_file)?;
-    let json: serde_json::Value = serde_json::from_str(&contents)?;
-
-    let private_key_hex = json
-        .get("private_key")
-        .and_then(|v| v.as_str())
-        .context("Missing private_key in keypair file")?;
-
-    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
-
-    if private_key_bytes.len() != 32 {
-        anyhow::bail!(
-            "Invalid private key length: expected 32 bytes, got {}",
-            private_key_bytes.len()
-        );
-    }
-
-    let mut private_key = [0u8; 32];
-    private_key.copy_from_slice(&private_key_bytes);
-
-    Keypair::from_private_key(&private_key).context("Failed to create keypair from private key")
 }
 
 // Helper function to load blockchain config
