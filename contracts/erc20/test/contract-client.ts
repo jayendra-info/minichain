@@ -1,4 +1,4 @@
-import { produceBlock, runMinichain } from "./test-utils";
+import { produceBlock, runMinichain } from "@minichain/contract-test-harness";
 
 const ERC20_CONTRACT_PATH = (() => {
   const base = import.meta.dir.replace(/\/test$/, "");

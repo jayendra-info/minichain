@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdir, rm } from "fs/promises";
-import { tmpdir } from "os";
-import { createAccount, initChain, mintNative } from "./test-utils";
+import { rm } from "fs/promises";
+import {
+  createAccount,
+  createTempDataDir,
+  initChain,
+  loadAddress,
+  mintNative,
+} from "@minichain/contract-test-harness";
 import { ContractClient, deployErc20, SELECTORS } from "./contract-client";
 
 interface TestContext {
@@ -16,20 +21,16 @@ let asBob: ContractClient;
 let asCharlie: ContractClient;
 
 beforeAll(async () => {
-  const dataDir = `${tmpdir()}/minichain-erc20-test-${Date.now()}`;
-  await mkdir(dataDir, { recursive: true });
+  const dataDir = await createTempDataDir("minichain-erc20-test");
 
   await initChain(dataDir);
   await createAccount(dataDir, "alice");
   await createAccount(dataDir, "bob");
   await createAccount(dataDir, "charlie");
 
-  const { address: aliceAddress } =
-    await Bun.file(`${dataDir}/keys/alice.json`).json() as { address: string };
-  const { address: bobAddress } =
-    await Bun.file(`${dataDir}/keys/bob.json`).json() as { address: string };
-  const { address: charlieAddress } =
-    await Bun.file(`${dataDir}/keys/charlie.json`).json() as { address: string };
+  const aliceAddress = await loadAddress(dataDir, "alice");
+  const bobAddress = await loadAddress(dataDir, "bob");
+  const charlieAddress = await loadAddress(dataDir, "charlie");
   await mintNative(dataDir, "authority_0", aliceAddress, 1_000_000);
   await mintNative(dataDir, "authority_0", bobAddress, 500_000);
   await mintNative(dataDir, "authority_0", charlieAddress, 500_000);

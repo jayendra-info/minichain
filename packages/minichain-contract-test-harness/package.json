@@ -1,0 +1,6 @@
+{
+  "name": "@minichain/contract-test-harness",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts"
+}

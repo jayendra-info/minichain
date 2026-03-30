@@ -1,5 +1,5 @@
 {
-  "name": "@minichain/erc20-contract",
+  "name": "@minichain/auction-contract",
   "private": true,
   "type": "module",
   "dependencies": {
