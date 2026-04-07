@@ -79,6 +79,18 @@ struct ListAccountsRequest {
 }
 
 #[derive(serde::Deserialize)]
+struct TxListRequest {
+    data_dir: Option<String>,
+    count: Option<usize>,
+}
+
+#[derive(serde::Deserialize)]
+struct TxGetRequest {
+    data_dir: Option<String>,
+    tx_hash: String,
+}
+
+#[derive(serde::Deserialize)]
 struct MintRequest {
     data_dir: Option<String>,
     from: String,
@@ -176,6 +188,8 @@ async fn main() {
         .route("/api/tx/send", post(send_transaction))
         .route("/api/tx/list", post(list_mempool))
         .route("/api/tx/clear", post(clear_mempool))
+        .route("/api/tx/get", post(get_transaction))
+        .route("/api/tx/transactions", post(list_transactions))
         .route("/api/block/list", post(list_blocks))
         .route("/api/block/info", post(block_info))
         .route("/api/block/produce", post(produce_block))
@@ -350,7 +364,7 @@ async fn send_transaction(
 
 async fn list_mempool(
     State(state): State<AppState>,
-    Json(req): Json<ListAccountsRequest>,
+    Json(req): Json<TxListRequest>,
 ) -> Json<ApiResponse<Vec<TransactionInfo>>> {
     let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::list_mempool(&data_dir) {
@@ -361,11 +375,34 @@ async fn list_mempool(
 
 async fn clear_mempool(
     State(state): State<AppState>,
-    Json(req): Json<ListAccountsRequest>,
+    Json(req): Json<TxListRequest>,
 ) -> Json<ApiResponse<String>> {
     let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
     match api::clear_mempool(&data_dir) {
         Ok(result) => Json(ApiResponse::ok(result)),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+async fn get_transaction(
+    State(state): State<AppState>,
+    Json(req): Json<TxGetRequest>,
+) -> Json<ApiResponse<TransactionInfo>> {
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
+    match api::get_transaction(&data_dir, &req.tx_hash) {
+        Ok(info) => Json(ApiResponse::ok(info)),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+async fn list_transactions(
+    State(state): State<AppState>,
+    Json(req): Json<TxListRequest>,
+) -> Json<ApiResponse<Vec<TransactionInfo>>> {
+    let data_dir = get_data_dir(&req.data_dir, &state.data_dir);
+    let count = req.count.unwrap_or(10);
+    match api::list_transactions(&data_dir, count) {
+        Ok(txs) => Json(ApiResponse::ok(txs)),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }
