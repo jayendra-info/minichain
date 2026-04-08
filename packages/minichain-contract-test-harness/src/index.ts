@@ -83,7 +83,7 @@ export async function produceBlock(dataDir: string): Promise<void> {
   if (SKIP_BLOCK_PRODUCTION) {
     return;
   }
-  await runMinichain("block", "produce", "--authority", "authority_0", "--data-dir", dataDir);
+  await runMinichain("block", "produce", "--authority", "@authority_0", "--data-dir", dataDir);
 }
 
 export async function getBalance(dataDir: string, address: string): Promise<number> {

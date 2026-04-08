@@ -5,10 +5,12 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 use minichain_chain::{Blockchain, BlockchainConfig};
 use minichain_consensus::{BlockProposer, PoAConfig};
-use minichain_core::{Address, Keypair};
+use minichain_core::Address;
 use minichain_storage::Storage;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::alias;
 
 #[derive(Args)]
 pub struct BlockArgs {
@@ -86,7 +88,7 @@ fn list_blocks(data_dir: PathBuf, count: usize) -> Result<()> {
         println!(
             "  {} {} {}",
             format!("#{}", height).bright_black(),
-            block.hash().to_hex()[..16].bright_yellow(),
+            block.hash().to_hex().bright_yellow(),
             format!("({} txs)", block.transactions.len()).bright_black()
         );
     }
@@ -148,7 +150,7 @@ fn show_block_info(data_dir: PathBuf, block_id: String) -> Result<()> {
             println!(
                 "  {} {}",
                 format!("{}.", i + 1).bright_black(),
-                tx_hash.to_hex()[..16].bright_yellow()
+                tx_hash.to_hex().bright_yellow()
             );
         }
         println!();
@@ -161,9 +163,8 @@ fn produce_block(data_dir: PathBuf, authority_name: String) -> Result<()> {
     println!("{}", "Producing new block...".bold().cyan());
     println!();
 
-    // Load authority keypair
-    let keys_dir = data_dir.join("keys");
-    let keypair = load_keypair(&keys_dir, &authority_name)?;
+    // Load authority keypair using alias module (supports @authority_0)
+    let keypair = alias::load_keypair_by_ref(&data_dir, &authority_name)?;
     let authority_addr = keypair.address();
 
     println!("  Authority: {}", authority_addr.to_hex().bright_yellow());
@@ -211,12 +212,16 @@ fn produce_block(data_dir: PathBuf, authority_name: String) -> Result<()> {
         .propose_block(&proposer)
         .context("Failed to produce block")?;
 
-    // Import the block into the chain
+    // Import the block into the chain (this updates state_root)
     blockchain
         .import_block(block.clone())
         .context("Failed to import block")?;
 
-    let block_hash = block.hash();
+    // Retrieve the block again to get the correct hash (with updated state_root)
+    let stored_block = chain
+        .get_block_by_height(head_height + 1)?
+        .context("Block not found after import")?;
+    let block_hash = stored_block.hash();
     let new_height = head_height + 1;
 
     println!();
@@ -230,38 +235,6 @@ fn produce_block(data_dir: PathBuf, authority_name: String) -> Result<()> {
     println!();
 
     Ok(())
-}
-
-fn load_keypair(keys_dir: &Path, name: &str) -> Result<Keypair> {
-    let key_file = keys_dir.join(format!("{}.json", name));
-    if !key_file.exists() {
-        bail!(
-            "Keypair file not found: {}. Use 'minichain account new' to create one.",
-            key_file.display()
-        );
-    }
-
-    let contents = fs::read_to_string(&key_file)?;
-    let json: serde_json::Value = serde_json::from_str(&contents)?;
-
-    let private_key_hex = json
-        .get("private_key")
-        .and_then(|v| v.as_str())
-        .context("Missing private_key in keypair file")?;
-
-    let private_key_bytes = hex::decode(private_key_hex).context("Invalid private key hex")?;
-
-    if private_key_bytes.len() != 32 {
-        bail!(
-            "Invalid private key length: expected 32 bytes, got {}",
-            private_key_bytes.len()
-        );
-    }
-
-    let mut private_key = [0u8; 32];
-    private_key.copy_from_slice(&private_key_bytes);
-
-    Keypair::from_private_key(&private_key).context("Failed to create keypair from private key")
 }
 
 // Helper function to load blockchain config

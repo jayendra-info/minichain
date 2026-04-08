@@ -26,7 +26,7 @@ pub enum Commands {
     /// Call a contract
     Call(call::CallArgs),
     /// Block explorer
-    Explore,
+    Explore(explore::ExploreArgs),
 }
 
 pub fn run(cmd: Commands) -> Result<()> {
@@ -37,9 +37,6 @@ pub fn run(cmd: Commands) -> Result<()> {
         Commands::Block(args) => block::run(args),
         Commands::Deploy(args) => deploy::run(args),
         Commands::Call(args) => call::run(args),
-        Commands::Explore => {
-            println!("explore: not yet implemented");
-            Ok(())
-        }
+        Commands::Explore(args) => explore::run(args),
     }
 }

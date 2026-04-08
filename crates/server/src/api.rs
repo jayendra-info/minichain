@@ -303,6 +303,74 @@ pub fn list_mempool(data_dir: &Path) -> Result<Vec<TransactionInfo>> {
     Ok(transactions)
 }
 
+pub fn get_transaction(data_dir: &Path, tx_hash: &str) -> Result<TransactionInfo> {
+    let tx_hash = Hash::from_hex(tx_hash).context("Invalid transaction hash")?;
+    let storage = Storage::open(data_dir)?;
+    let chain = ChainStore::new(&storage);
+    let head_height = chain.get_height()?;
+
+    for height in 0..=head_height {
+        let block = match chain.get_block_by_height(height)? {
+            Some(b) => b,
+            None => continue,
+        };
+
+        for tx in block.transactions.iter() {
+            if tx.hash() == tx_hash {
+                return Ok(TransactionInfo {
+                    hash: tx.hash().to_hex(),
+                    from: tx.from.to_hex(),
+                    to: tx.to.map(|a| a.to_hex()),
+                    value: tx.value.to_string(),
+                    nonce: tx.nonce,
+                    data: if tx.data.is_empty() {
+                        None
+                    } else {
+                        Some(hex::encode(&tx.data))
+                    },
+                });
+            }
+        }
+    }
+
+    anyhow::bail!("Transaction not found")
+}
+
+pub fn list_transactions(data_dir: &Path, count: usize) -> Result<Vec<TransactionInfo>> {
+    let storage = Storage::open(data_dir)?;
+    let chain = ChainStore::new(&storage);
+    let head_height = chain.get_height()?;
+
+    let mut txs: Vec<TransactionInfo> = Vec::new();
+
+    for height in (0..=head_height).rev() {
+        if let Some(block) = chain.get_block_by_height(height)? {
+            for tx in block.transactions {
+                txs.push(TransactionInfo {
+                    hash: tx.hash().to_hex(),
+                    from: tx.from.to_hex(),
+                    to: tx.to.map(|a| a.to_hex()),
+                    value: tx.value.to_string(),
+                    nonce: tx.nonce,
+                    data: if tx.data.is_empty() {
+                        None
+                    } else {
+                        Some(hex::encode(&tx.data))
+                    },
+                });
+                if txs.len() >= count {
+                    break;
+                }
+            }
+        }
+        if txs.len() >= count {
+            break;
+        }
+    }
+
+    Ok(txs)
+}
+
 pub fn clear_mempool(data_dir: &Path) -> Result<String> {
     let storage = Storage::open(data_dir)?;
     let db = storage.inner();
